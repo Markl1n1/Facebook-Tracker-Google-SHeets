@@ -525,8 +525,25 @@ def webhook():
         if json_data:
             logger.info(f"Received webhook update: {json_data.get('update_id', 'unknown')}")
             update = Update.de_json(json_data, telegram_app.bot)
-            telegram_app.update_queue.put(update)
-            logger.info(f"Update queued successfully: {update.update_id}")
+            
+            # Process update asynchronously using the telegram event loop
+            import asyncio
+            if telegram_event_loop and telegram_event_loop.is_running():
+                # Schedule update processing in the telegram event loop
+                asyncio.run_coroutine_threadsafe(
+                    telegram_app.process_update(update),
+                    telegram_event_loop
+                )
+            else:
+                # Fallback: process synchronously if loop not ready
+                logger.warning("Telegram event loop not ready, processing update synchronously")
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(telegram_app.process_update(update))
+                loop.close()
+            
+            logger.info(f"Update queued for processing: {update.update_id}")
         else:
             logger.warning("Received empty webhook request")
         return "OK", 200
@@ -545,6 +562,7 @@ async def setup_webhook():
 
 # Initialize Telegram application
 telegram_app = None
+telegram_event_loop = None
 
 def create_telegram_app():
     """Create and configure Telegram application"""
@@ -672,11 +690,17 @@ if __name__ == '__main__':
     import threading
     
     def run_telegram_setup():
-        """Run async webhook setup in a separate thread"""
+        """Run async webhook setup and start update processing in a separate thread"""
+        global telegram_event_loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        telegram_event_loop = loop  # Save reference for webhook
         loop.run_until_complete(telegram_app.initialize())
         loop.run_until_complete(setup_webhook())
+        # Start processing updates
+        loop.run_until_complete(telegram_app.start())
+        # Keep the loop running to process updates
+        loop.run_forever()
     
     # Start webhook setup in background
     setup_thread = threading.Thread(target=run_telegram_setup)
