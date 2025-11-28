@@ -836,6 +836,30 @@ async def add_field_telegram_callback(update: Update, context: ContextTypes.DEFA
 async def add_field_manager_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await add_field_callback(update, context, 'manager_name', 'Manager Name', ADD_MANAGER_NAME)
 
+# Field labels for uniqueness check messages (Russian)
+UNIQUENESS_FIELD_LABELS = {
+    'phone': 'Номер телефона',
+    'email': 'Email',
+    'fullname': 'Имя',
+    'facebook_id': 'Facebook ID',
+    'facebook_username': 'Facebook Username',
+    'facebook_link': 'Facebook Link'
+}
+
+def check_field_uniqueness(client, field_name: str, field_value: str) -> bool:
+    """Check if a field value already exists in the database"""
+    if not field_value or field_value.strip() == '':
+        return True  # Empty values are considered unique
+    
+    try:
+        response = client.table(TABLE_NAME).select("id").eq(field_name, field_value).execute()
+        # If any records found, field is not unique
+        return not (response.data and len(response.data) > 0)
+    except Exception as e:
+        logger.error(f"Error checking uniqueness for {field_name}: {e}", exc_info=True)
+        # On error, assume not unique to prevent duplicate inserts
+        return False
+
 async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Validate and save the lead"""
     query = update.callback_query
@@ -873,7 +897,7 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ADD_MENU
     
-    # Save to database
+    # Get Supabase client for uniqueness check
     client = get_supabase_client()
     if not client:
         await query.edit_message_text(
@@ -884,7 +908,31 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del user_data_store[user_id]
         return ConversationHandler.END
     
+    # Check uniqueness of fields
+    fields_to_check = ['phone', 'email', 'fullname', 'facebook_id', 'facebook_username', 'facebook_link']
+    
+    for field_name in fields_to_check:
+        field_value = user_data.get(field_name)
+        if field_value and field_value.strip():  # Only check non-empty fields
+            # Normalize phone if checking phone field
+            check_value = normalize_phone(field_value) if field_name == 'phone' else field_value
+            
+            is_unique = check_field_uniqueness(client, field_name, check_value)
+            if not is_unique:
+                field_label = UNIQUENESS_FIELD_LABELS.get(field_name, field_name)
+                await query.edit_message_text(
+                    f"❌ {field_label} уже существует в базе.\n\n"
+                    "Выберите поле для заполнения:",
+                    reply_markup=get_add_field_keyboard(user_id)
+                )
+                return ADD_MENU
+    
+    # All fields are unique, proceed with saving
     try:
+        # Normalize phone in user_data before saving if present
+        if 'phone' in user_data and user_data['phone']:
+            user_data['phone'] = normalize_phone(user_data['phone'])
+        
         response = client.table(TABLE_NAME).insert(user_data).execute()
         
         if response.data:
