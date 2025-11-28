@@ -40,9 +40,26 @@ def get_supabase_client():
                 logger.error("SUPABASE_URL not found in environment variables")
                 return None
             
-            # Try to create client - use simple creation to avoid proxy parameter issues
-            # The proxy error occurs due to dependency conflicts, so we use the simplest approach
-            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            # Create httpx client without proxy to avoid compatibility issues
+            import httpx
+            from supabase.client import ClientOptions
+            
+            # Create httpx client with explicit settings (no proxy)
+            http_client = httpx.Client(
+                timeout=httpx.Timeout(30.0),
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+            )
+            
+            # Create Supabase client with custom http_client
+            supabase = create_client(
+                SUPABASE_URL, 
+                SUPABASE_KEY,
+                options=ClientOptions(
+                    http_client=http_client,
+                    auto_refresh_token=False,
+                    persist_session=False
+                )
+            )
             
             logger.info("Supabase client initialized successfully")
         except Exception as e:
