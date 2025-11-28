@@ -141,10 +141,107 @@ def get_supabase_client():
     return supabase
 
 def normalize_phone(phone: str) -> str:
-    """Normalize phone number: remove + and spaces"""
+    """Normalize phone number: remove all non-digit characters"""
     if not phone:
         return ""
-    return phone.replace("+", "").replace(" ", "").strip()
+    # Remove all non-digit characters
+    return ''.join(filter(str.isdigit, phone))
+
+import re
+from urllib.parse import urlparse, parse_qs
+
+def validate_phone(phone: str) -> tuple[bool, str, str]:
+    """Validate phone number: minimum 7 digits, maximum 15 digits"""
+    normalized = normalize_phone(phone)
+    if not normalized:
+        return False, "Номер телефона не может быть пустым", ""
+    if len(normalized) < 7:
+        return False, "Номер телефона должен содержать минимум 7 цифр", ""
+    if len(normalized) > 15:
+        return False, "Номер телефона не может содержать более 15 цифр", ""
+    return True, "", normalized
+
+def validate_email(email: str) -> tuple[bool, str]:
+    """Validate email format"""
+    if not email:
+        return False, "Email не может быть пустым"
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(pattern, email):
+        return False, "Неверный формат email. Пример: user@example.com"
+    return True, ""
+
+def validate_facebook_id(fb_id: str) -> tuple[bool, str]:
+    """Validate Facebook ID: only digits"""
+    if not fb_id:
+        return False, "Facebook ID не может быть пустым"
+    if not fb_id.isdigit():
+        return False, "Facebook ID должен содержать только цифры"
+    return True, ""
+
+def validate_facebook_link(link: str) -> tuple[bool, str, str]:
+    """Validate Facebook link and extract the part ending with id (subpage)"""
+    if not link:
+        return False, "Facebook ссылка не может быть пустой", ""
+    
+    # Remove http:// or https:// if present
+    link_clean = link.strip()
+    if link_clean.startswith('http://'):
+        link_clean = link_clean[7:]
+    elif link_clean.startswith('https://'):
+        link_clean = link_clean[8:]
+    
+    # Remove www. if present
+    if link_clean.startswith('www.'):
+        link_clean = link_clean[4:]
+    
+    # Remove facebook.com/ or m.facebook.com/ if present
+    if link_clean.startswith('facebook.com/'):
+        link_clean = link_clean[13:]
+    elif link_clean.startswith('m.facebook.com/'):
+        link_clean = link_clean[15:]
+    
+    # Extract the part that ends with id (subpage)
+    # Facebook links typically have format: profile/username or profile/id or just username/id
+    # We want to extract the part ending with /id or just id
+    # Examples:
+    # https://www.facebook.com/profile.php?id=123456 -> profile.php?id=123456
+    # https://www.facebook.com/username -> username
+    # https://www.facebook.com/profile/username -> profile/username
+    # https://www.facebook.com/people/First-Last/123456 -> people/First-Last/123456
+    
+    parts = link_clean.split('/')
+    if len(parts) > 0:
+        # Get the last part (usually the id or username)
+        extracted = parts[-1]
+        # If there's a part before that, include it to get the full path
+        if len(parts) > 1:
+            # Include the path that leads to the id
+            extracted = '/'.join(parts)
+        return True, "", extracted
+    
+    return False, "Неверный формат Facebook ссылки", ""
+
+def validate_telegram_user(tg_user: str) -> tuple[bool, str, str]:
+    """Validate Telegram username: remove @ if present, check not empty"""
+    if not tg_user:
+        return False, "Telegram username не может быть пустым", ""
+    normalized = tg_user.strip()
+    if normalized.startswith('@'):
+        normalized = normalized[1:]
+    if not normalized:
+        return False, "Telegram username не может быть пустым", ""
+    return True, "", normalized
+
+def validate_facebook_username(username: str) -> tuple[bool, str, str]:
+    """Validate Facebook username: remove @ if present"""
+    if not username:
+        return False, "Facebook username не может быть пустым", ""
+    normalized = username.strip()
+    if normalized.startswith('@'):
+        normalized = normalized[1:]
+    if not normalized:
+        return False, "Facebook username не может быть пустым", ""
+    return True, "", normalized
 
 # Conversation states
 (
@@ -357,55 +454,96 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
     # Normalize phone if checking by phone
     if field_name == "phone":
         search_value = normalize_phone(search_value)
+        logger.info(f"DEBUG: Checking phone, normalized: {search_value}")
     
     # Get Supabase client (for all fields, not just phone)
-        client = get_supabase_client()
-        if not client:
-            await update.message.reply_text(
+    client = get_supabase_client()
+    if not client:
+        await update.message.reply_text(
             "❌ Ошибка: Не удалось подключиться к базе данных.",
             reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
     
     try:
-        response = client.table(TABLE_NAME).select("*").eq(field_name, search_value).execute()
+        # For phone: search by last 7-9 digits
+        if field_name == "phone":
+            # Extract last 7-9 digits
+            if len(search_value) >= 9:
+                last_digits = search_value[-9:]
+            elif len(search_value) >= 7:
+                last_digits = search_value[-7:]
+            else:
+                last_digits = search_value
+            
+            logger.info(f"DEBUG: Searching phone by last digits: {last_digits}")
+            # Search by suffix using ilike (case-insensitive pattern matching)
+            response = client.table(TABLE_NAME).select("*").ilike(field_name, f"%{last_digits}").execute()
+        else:
+            # For other fields: exact match
+            response = client.table(TABLE_NAME).select("*").eq(field_name, search_value).execute()
+        
+        # Field labels mapping (Russian)
+        field_labels = {
+            'fullname': 'Имя',
+            'phone': 'Телефон',
+            'email': 'Email',
+            'country': 'Страна',
+            'facebook_id': 'Facebook ID',
+            'facebook_username': 'Facebook Username',
+            'facebook_link': 'Facebook Link',
+            'telegram_user': 'Telegram',
+            'manager_name': 'Добавил',
+            'created_at': 'Дата'
+        }
         
         if response.data and len(response.data) > 0:
-            result = response.data[0]
+            results = response.data
+            logger.info(f"DEBUG: Found {len(results)} result(s)")
             
-            # Field labels mapping (Russian)
-            field_labels = {
-                'fullname': 'Имя',
-                'phone': 'Телефон',
-                'email': 'Email',
-                'country': 'Страна',
-                'facebook_id': 'Facebook ID',
-                'facebook_username': 'Facebook Username',
-                'facebook_link': 'Facebook Link',
-                'telegram_user': 'Telegram',
-                'manager_name': 'Добавил',
-                'created_at': 'Дата'
-            }
-            
-            # Build message with all non-null fields (except id)
-            message_parts = ["✅ Клиент найден."]
-            
-            for field_name, field_label in field_labels.items():
-                value = result.get(field_name)
+            # If multiple results, show all
+            if len(results) > 1:
+                message_parts = [f"✅ Найдено клиентов: {len(results)}\n"]
                 
-                # Skip if None, empty string, or 'Не указано'
-                if value is None or value == '' or value == 'Не указано':
-                    continue
-        
-                # Format date field
-                if field_name == 'created_at':
-                    try:
-                        dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
-                        value = dt.strftime('%d.%m.%Y %H:%M')
-                    except:
-                        pass
+                for idx, result in enumerate(results, 1):
+                    message_parts.append(f"\n--- Клиент {idx} ---")
+                    for field_name_key, field_label in field_labels.items():
+                        value = result.get(field_name_key)
+                        
+                        # Skip if None, empty string, or 'Не указано'
+                        if value is None or value == '' or value == 'Не указано':
+                            continue
+                        
+                        # Format date field
+                        if field_name_key == 'created_at':
+                            try:
+                                dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+                                value = dt.strftime('%d.%m.%Y %H:%M')
+                            except:
+                                pass
+                        
+                        message_parts.append(f"{field_label}: {value}")
+            else:
+                # Single result
+                result = results[0]
+                message_parts = ["✅ Клиент найден."]
                 
-                message_parts.append(f"{field_label}: {value}")
+                for field_name_key, field_label in field_labels.items():
+                    value = result.get(field_name_key)
+                    
+                    # Skip if None, empty string, or 'Не указано'
+                    if value is None or value == '' or value == 'Не указано':
+                        continue
+            
+                    # Format date field
+                    if field_name_key == 'created_at':
+                        try:
+                            dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+                            value = dt.strftime('%d.%m.%Y %H:%M')
+                        except:
+                            pass
+                    
+                    message_parts.append(f"{field_label}: {value}")
             
             message = "\n".join(message_parts)
         else:
@@ -458,7 +596,7 @@ async def add_field_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await query.edit_message_text(f"📝 Введите {field_label}:")
     
     context.user_data['current_field'] = field_name
-    context.user_data['next_state'] = next_state
+    context.user_data['current_state'] = next_state
     return next_state
 
 async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -471,10 +609,73 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Skip this field
         pass
     elif field_name:
+        # Validate and normalize based on field type
+        validation_passed = False
+        normalized_value = text
+        
         if field_name == 'phone':
-            text = normalize_phone(text)
-        if text:  # Only save non-empty values
-            user_data_store[user_id][field_name] = text
+            is_valid, error_msg, normalized = validate_phone(text)
+            if is_valid:
+                validation_passed = True
+                normalized_value = normalized
+            else:
+                await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+                return context.user_data.get('current_state', ADD_MENU)
+        
+        elif field_name == 'email':
+            is_valid, error_msg = validate_email(text)
+            if is_valid:
+                validation_passed = True
+            else:
+                await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+                return context.user_data.get('current_state', ADD_MENU)
+        
+        elif field_name == 'facebook_id':
+            is_valid, error_msg = validate_facebook_id(text)
+            if is_valid:
+                validation_passed = True
+            else:
+                await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+                return context.user_data.get('current_state', ADD_MENU)
+        
+        elif field_name == 'facebook_link':
+            is_valid, error_msg, extracted = validate_facebook_link(text)
+            if is_valid:
+                validation_passed = True
+                normalized_value = extracted
+            else:
+                await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+                return context.user_data.get('current_state', ADD_MENU)
+        
+        elif field_name == 'telegram_user':
+            is_valid, error_msg, normalized = validate_telegram_user(text)
+            if is_valid:
+                validation_passed = True
+                normalized_value = normalized
+            else:
+                await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+                return context.user_data.get('current_state', ADD_MENU)
+        
+        elif field_name == 'facebook_username':
+            is_valid, error_msg, normalized = validate_facebook_username(text)
+            if is_valid:
+                validation_passed = True
+                normalized_value = normalized
+            else:
+                await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+                return context.user_data.get('current_state', ADD_MENU)
+        
+        else:
+            # For other fields (fullname, country, manager_name), just check not empty
+            if text:
+                validation_passed = True
+            else:
+                await update.message.reply_text(f"❌ Поле не может быть пустым.\n\nПопробуйте снова:")
+                return context.user_data.get('current_state', ADD_MENU)
+        
+        # Save value only if validation passed
+        if validation_passed and normalized_value:
+            user_data_store[user_id][field_name] = normalized_value
     
     # Show menu again
     message = (
