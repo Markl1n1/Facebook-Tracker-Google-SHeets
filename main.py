@@ -326,6 +326,40 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /q command - return to main menu from any state"""
+    try:
+        # Clear any conversation state
+        if context.user_data:
+            context.user_data.clear()
+        
+        # Clear user data store if exists
+        user_id = update.effective_user.id
+        if user_id in user_data_store:
+            del user_data_store[user_id]
+        
+        # Show main menu
+        welcome_message = (
+            "👋 Главное меню\n\n"
+            "Выберите действие:"
+        )
+        await update.message.reply_text(
+            welcome_message,
+            reply_markup=get_main_menu_keyboard()
+        )
+        logger.info(f"Quit command processed for user {user_id}")
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Error in quit_command: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(
+                "❌ Произошла ошибка. Попробуйте позже.",
+                reply_markup=get_main_menu_keyboard()
+            )
+        except:
+            pass
+        return ConversationHandler.END
+
 # Callback query handlers
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks for menu navigation"""
@@ -1031,7 +1065,8 @@ def create_telegram_app():
     
     # Add command handlers
     telegram_app.add_handler(CommandHandler("start", start_command))
-    # Note: /cancel is still available as fallback in ConversationHandler's
+    telegram_app.add_handler(CommandHandler("q", quit_command))
+    # Note: /q command has high priority and will work from any state
     
     # Add callback query handler for menu navigation buttons
     telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu)$"))
@@ -1040,42 +1075,42 @@ def create_telegram_app():
     check_telegram_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_telegram_callback, pattern="^check_telegram$")],
         states={CHECK_BY_TELEGRAM: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_input)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("q", quit_command)],
         per_message=False,
     )
     
     check_fb_link_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fb_link_callback, pattern="^check_fb_link$")],
         states={CHECK_BY_FB_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_link_input)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("q", quit_command)],
         per_message=False,
     )
     
     check_fb_username_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fb_username_callback, pattern="^check_fb_username$")],
         states={CHECK_BY_FB_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_username_input)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("q", quit_command)],
         per_message=False,
     )
     
     check_fb_id_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fb_id_callback, pattern="^check_fb_id$")],
         states={CHECK_BY_FB_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_id_input)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("q", quit_command)],
         per_message=False,
     )
     
     check_phone_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_phone_callback, pattern="^check_phone$")],
         states={CHECK_BY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_phone_input)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("q", quit_command)],
         per_message=False,
     )
     
     check_fullname_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fullname_callback, pattern="^check_fullname$")],
         states={CHECK_BY_FULLNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fullname_input)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("q", quit_command)],
         per_message=False,
     )
     
@@ -1106,7 +1141,7 @@ def create_telegram_app():
             ADD_TELEGRAM_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input)],
             ADD_MANAGER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input)],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("q", quit_command)],
         per_message=False,
     )
     
