@@ -1016,6 +1016,12 @@ def webhook():
         json_data = request.get_json()
         if json_data:
             logger.info(f"Received webhook update: {json_data.get('update_id', 'unknown')}")
+            
+            # Check if telegram_app is initialized
+            if telegram_app is None:
+                logger.error("Telegram app is not initialized yet")
+                return "Service not ready", 503
+            
             update = Update.de_json(json_data, telegram_app.bot)
             
             # Process update asynchronously using the telegram event loop
@@ -1055,6 +1061,46 @@ async def setup_webhook():
 # Initialize Telegram application
 telegram_app = None
 telegram_event_loop = None
+
+def initialize_telegram_app():
+    """Initialize Telegram app - called on module import (needed for gunicorn)"""
+    global telegram_app, telegram_event_loop
+    
+    # Validate environment variables first
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not found - Telegram app will not be initialized")
+        return
+    
+    if not WEBHOOK_URL:
+        logger.error("WEBHOOK_URL not found - Telegram app will not be initialized")
+        return
+    
+    # Create Telegram app
+    create_telegram_app()
+    
+    # Initialize Telegram bot in a separate thread
+    import asyncio
+    import threading
+    
+    def run_telegram_setup():
+        """Run async webhook setup and start update processing in a separate thread"""
+        global telegram_event_loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        telegram_event_loop = loop  # Save reference for webhook
+        loop.run_until_complete(telegram_app.initialize())
+        loop.run_until_complete(setup_webhook())
+        # Start processing updates
+        loop.run_until_complete(telegram_app.start())
+        # Keep the loop running to process updates
+        loop.run_forever()
+    
+    # Start webhook setup in background
+    setup_thread = threading.Thread(target=run_telegram_setup)
+    setup_thread.daemon = True
+    setup_thread.start()
+    
+    logger.info("Telegram app initialization started in background thread")
 
 def create_telegram_app():
     """Create and configure Telegram application"""
@@ -1157,6 +1203,10 @@ def create_telegram_app():
     logger.info("Telegram application initialized")
     return telegram_app
 
+# Initialize Telegram app when module is imported (needed for gunicorn)
+# This ensures telegram_app is initialized even when running with gunicorn
+initialize_telegram_app()
+
 if __name__ == '__main__':
     # Validate environment variables
     missing_vars = []
@@ -1179,41 +1229,15 @@ if __name__ == '__main__':
         exit(1)
     
     # Note: Supabase client will be initialized lazily on first use
-    # This prevents startup errors if there are dependency conflicts
     logger.info("Supabase client will be initialized on first use")
     
-    # Create Telegram app
-    create_telegram_app()
-    
-    # Initialize Telegram bot in a separate thread
-    import asyncio
-    import threading
-    
-    def run_telegram_setup():
-        """Run async webhook setup and start update processing in a separate thread"""
-        global telegram_event_loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        telegram_event_loop = loop  # Save reference for webhook
-        loop.run_until_complete(telegram_app.initialize())
-        loop.run_until_complete(setup_webhook())
-        # Start processing updates
-        loop.run_until_complete(telegram_app.start())
-        # Keep the loop running to process updates
-        loop.run_forever()
-    
-    # Start webhook setup in background
-    setup_thread = threading.Thread(target=run_telegram_setup)
-    setup_thread.daemon = True
-    setup_thread.start()
-    
+    # Telegram app is already initialized by initialize_telegram_app() above
     # Give it a moment to initialize
     import time
     time.sleep(2)
     
     # For production, gunicorn will be used (see Procfile)
     # This code is kept for local development
-    if __name__ == '__main__':
-        logger.info(f"Starting Flask development server on port {PORT}")
-        logger.warning("For production, use: gunicorn -w 1 -b 0.0.0.0:$PORT main:app")
-        app.run(host='0.0.0.0', port=PORT, debug=False)
+    logger.info(f"Starting Flask development server on port {PORT}")
+    logger.warning("For production, use: gunicorn -w 1 -b 0.0.0.0:$PORT main:app")
+    app.run(host='0.0.0.0', port=PORT, debug=False)
