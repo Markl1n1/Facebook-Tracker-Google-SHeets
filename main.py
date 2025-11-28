@@ -521,7 +521,9 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
                 message_parts = [f"✅ Найдено клиентов: {len(results)}\n"]
                 
                 for idx, result in enumerate(results, 1):
-                    message_parts.append(f"\n--- Клиент {idx} ---")
+                    if idx > 1:
+                        message_parts.append("")  # Empty line between leads
+                    message_parts.append(f"--- Клиент {idx} ---")
                     for field_name_key, field_label in field_labels.items():
                         value = result.get(field_name_key)
                         
@@ -543,7 +545,7 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             else:
                 # Single result
                 result = results[0]
-                message_parts = ["✅ Клиент найден."]
+                message_parts = ["✅ Лид найден.", ""]  # Empty line after header
                 
                 for field_name_key, field_label in field_labels.items():
                     value = result.get(field_name_key)
@@ -635,7 +637,9 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_parts = [f"✅ Найдено клиентов: {len(results)}\n"]
                 
                 for idx, result in enumerate(results, 1):
-                    message_parts.append(f"\n--- Клиент {idx} ---")
+                    if idx > 1:
+                        message_parts.append("")  # Empty line between leads
+                    message_parts.append(f"--- Клиент {idx} ---")
                     for field_name_key, field_label in field_labels.items():
                         value = result.get(field_name_key)
                         
@@ -657,7 +661,7 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Single result
                 result = results[0]
-                message_parts = ["✅ Клиент найден."]
+                message_parts = ["✅ Лид найден.", ""]  # Empty line after header
                 
                 for field_name_key, field_label in field_labels.items():
                     value = result.get(field_name_key)
