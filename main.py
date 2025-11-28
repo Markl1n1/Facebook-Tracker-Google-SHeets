@@ -206,9 +206,12 @@ def get_add_field_keyboard(user_id: int):
     user_data = user_data_store.get(user_id, {})
     keyboard = []
     
-    # Обязательное поле - серый круг по умолчанию, зеленый круг когда заполнено
+    # Обязательные поля - серый круг по умолчанию, зеленый круг когда заполнено
     fullname_status = "🟢" if user_data.get('fullname') else "⚪"
-    keyboard.append([InlineKeyboardButton(f"{fullname_status} Full Name (обязательно)", callback_data="add_field_fullname")])
+    manager_status = "🟢" if user_data.get('manager_name') else "⚪"
+    
+    keyboard.append([InlineKeyboardButton(f"{fullname_status} * Full Name", callback_data="add_field_fullname")])
+    keyboard.append([InlineKeyboardButton(f"{manager_status} * Manager Name", callback_data="add_field_manager")])
     
     # Обязательные идентификаторы (минимум один) - серый круг по умолчанию, зеленый круг когда заполнено
     phone_status = "🟢" if user_data.get('phone') else "⚪"
@@ -226,11 +229,9 @@ def get_add_field_keyboard(user_id: int):
     # Опциональные поля - серый круг по умолчанию, зеленый круг когда заполнено
     email_status = "🟢" if user_data.get('email') else "⚪"
     country_status = "🟢" if user_data.get('country') else "⚪"
-    manager_status = "🟢" if user_data.get('manager_name') else "⚪"
     
     keyboard.append([InlineKeyboardButton(f"{email_status} Email", callback_data="add_field_email")])
     keyboard.append([InlineKeyboardButton(f"{country_status} Country", callback_data="add_field_country")])
-    keyboard.append([InlineKeyboardButton(f"{manager_status} Manager Name", callback_data="add_field_manager")])
     
     # Кнопки действий
     keyboard.append([InlineKeyboardButton("💾 Сохранить", callback_data="add_save")])
@@ -259,34 +260,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except:
             pass
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
-    help_message = (
-        "ℹ️ Помощь\n\n"
-        "Этот бот помогает вести клиентскую базу и проверять существующих клиентов.\n\n"
-        "Основные функции:\n"
-        "• ✅ Проверить - проверка клиента по:\n"
-        "  📱 Telegram, 🔗 Facebook Link, 👤 Facebook Username, 🆔 Facebook ID, 🔢 Phone\n"
-        "• ➕ Добавить - добавление нового клиента в базу\n"
-        "  Все поля опциональны, кроме Full Name\n"
-        "  Минимум одно из: Phone, Facebook Link, Telegram, Facebook Username, Facebook ID\n\n"
-        "Используйте кнопки меню для навигации."
-    )
-    await update.message.reply_text(help_message)
-
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel current operation"""
-    user_id = update.effective_user.id
-    
-    if user_id in user_data_store:
-        del user_data_store[user_id]
-    
-    await update.message.reply_text(
-        "❌ Операция отменена.",
-        reply_markup=get_main_menu_keyboard()
-    )
-    return ConversationHandler.END
 
 # Callback query handlers
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -360,7 +333,10 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message = (
         "➕ Добавление нового лида\n\n"
-
+        "Обязательные поля:\n"
+        "• * Full Name\n"
+        "• * Manager Name\n"
+        "• Минимум одно из: Phone, Facebook Link, Telegram, Facebook Username, Facebook ID\n\n"
         "Выберите поле для заполнения:"
     )
     
@@ -381,9 +357,9 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         search_value = normalize_phone(search_value)
     
     # Get Supabase client (for all fields, not just phone)
-    client = get_supabase_client()
-    if not client:
-        await update.message.reply_text(
+        client = get_supabase_client()
+        if not client:
+            await update.message.reply_text(
             "❌ Ошибка: Не удалось подключиться к базе данных.",
             reply_markup=get_main_menu_keyboard()
         )
@@ -418,7 +394,7 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
                 # Skip if None, empty string, or 'Не указано'
                 if value is None or value == '' or value == 'Не указано':
                     continue
-                
+        
                 # Format date field
                 if field_name == 'created_at':
                     try:
@@ -433,10 +409,10 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         else:
             message = "❌ Клиент не найден."
         
-        await update.message.reply_text(
+            await update.message.reply_text(
             message,
             reply_markup=get_main_menu_keyboard()
-        )
+            )
         
     except Exception as e:
         logger.error(f"Error checking by {field_name}: {e}", exc_info=True)
@@ -547,6 +523,14 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_data.get('fullname'):
         await query.edit_message_text(
             "❌ Ошибка: Full Name обязателен для заполнения!\n\n"
+            "Выберите поле для заполнения:",
+            reply_markup=get_add_field_keyboard(user_id)
+        )
+        return ADD_MENU
+    
+    if not user_data.get('manager_name'):
+        await query.edit_message_text(
+            "❌ Ошибка: Manager Name обязателен для заполнения!\n\n"
             "Выберите поле для заполнения:",
             reply_markup=get_add_field_keyboard(user_id)
         )
@@ -681,8 +665,7 @@ def create_telegram_app():
     
     # Add command handlers
     telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(CommandHandler("help", help_command))
-    telegram_app.add_handler(CommandHandler("cancel", cancel_command))
+    # Note: /cancel is still available as fallback in ConversationHandler's
     
     # Add callback query handler for menu navigation buttons    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu)$"))
     
@@ -690,35 +673,35 @@ def create_telegram_app():
     check_telegram_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_telegram_callback, pattern="^check_telegram$")],
         states={CHECK_BY_TELEGRAM: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_input)]},
-        fallbacks=[CommandHandler("cancel", cancel_command)],
+        fallbacks=[],
         per_message=False,
     )
     
     check_fb_link_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fb_link_callback, pattern="^check_fb_link$")],
         states={CHECK_BY_FB_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_link_input)]},
-        fallbacks=[CommandHandler("cancel", cancel_command)],
+        fallbacks=[],
         per_message=False,
     )
     
     check_fb_username_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fb_username_callback, pattern="^check_fb_username$")],
         states={CHECK_BY_FB_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_username_input)]},
-        fallbacks=[CommandHandler("cancel", cancel_command)],
+        fallbacks=[],
         per_message=False,
     )
     
     check_fb_id_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fb_id_callback, pattern="^check_fb_id$")],
         states={CHECK_BY_FB_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_id_input)]},
-        fallbacks=[CommandHandler("cancel", cancel_command)],
+        fallbacks=[],
         per_message=False,
     )
     
     check_phone_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_phone_callback, pattern="^check_phone$")],
         states={CHECK_BY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_phone_input)]},
-        fallbacks=[CommandHandler("cancel", cancel_command)],
+        fallbacks=[],
         per_message=False,
     )
     
@@ -749,7 +732,7 @@ def create_telegram_app():
             ADD_TELEGRAM_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input)],
             ADD_MANAGER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input)],
         },
-        fallbacks=[CommandHandler("cancel", cancel_command)],
+        fallbacks=[],
         per_message=False,
     )
     
