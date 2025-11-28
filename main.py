@@ -68,7 +68,7 @@ def normalize_phone(phone: str) -> str:
     ADD_FB_LINK,
     ADD_TELEGRAM_USER,
     ADD_MANAGER_NAME
-) = range(16)
+) = range(15)
 
 # Store user data during conversation
 user_data_store = {}
