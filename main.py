@@ -16,13 +16,13 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 
-# Environment variables
+# Environment variables - all required except PORT (set by Koyeb)
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
-SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://mwovubdpxkeqpyxsadgg.supabase.co')
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
-TABLE_NAME = os.environ.get('TABLE_NAME', 'facebook_leads')
-PORT = int(os.environ.get('PORT', 8000))
+TABLE_NAME = os.environ.get('TABLE_NAME', 'facebook_leads')  # Default table name
+PORT = int(os.environ.get('PORT', 8000))  # Default port, usually set by Koyeb
 
 # Supabase client
 supabase: Client = None
@@ -614,16 +614,23 @@ def create_telegram_app():
 
 if __name__ == '__main__':
     # Validate environment variables
+    missing_vars = []
+    
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN not set!")
-        exit(1)
+        missing_vars.append("TELEGRAM_BOT_TOKEN")
     
     if not WEBHOOK_URL:
-        logger.error("WEBHOOK_URL not set!")
-        exit(1)
+        missing_vars.append("WEBHOOK_URL")
+    
+    if not SUPABASE_URL:
+        missing_vars.append("SUPABASE_URL")
     
     if not SUPABASE_KEY:
-        logger.error("SUPABASE_KEY not set!")
+        missing_vars.append("SUPABASE_KEY")
+    
+    if missing_vars:
+        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        logger.error("Please set all required environment variables in Koyeb dashboard")
         exit(1)
     
     # Initialize Supabase client
