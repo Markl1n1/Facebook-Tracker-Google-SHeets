@@ -1,4 +1,9 @@
 import os
+# Set environment variables to disable proxy before importing supabase
+# This prevents httpx.Client from receiving 'proxy' argument which is not supported in newer httpx versions
+os.environ.setdefault("NO_PROXY", "*")
+os.environ.setdefault("HTTPX_NO_PROXY", "1")
+
 import logging
 from datetime import datetime
 from flask import Flask, request
@@ -40,19 +45,9 @@ def get_supabase_client():
                 logger.error("SUPABASE_URL not found in environment variables")
                 return None
             
-            # Try simple creation first (new version >=2.5.0 should handle httpx compatibility)
-            try:
-                supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-                logger.info("Supabase client initialized successfully")
-            except TypeError as e:
-                if "proxy" in str(e):
-                    # Fallback: set environment variable to disable proxy
-                    import os
-                    os.environ.setdefault("HTTPX_NO_PROXY", "1")
-                    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-                    logger.info("Supabase client initialized successfully (with HTTPX_NO_PROXY)")
-                else:
-                    raise
+            # Create Supabase client - environment variables are set at module level to prevent proxy issues
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            logger.info("Supabase client initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing Supabase client: {e}", exc_info=True)
             return None
@@ -199,11 +194,12 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user_id in user_data_store:
         del user_data_store[user_id]
-        await update.message.reply_text(
-            "❌ Операция отменена.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "❌ Операция отменена.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    return ConversationHandler.END
 
 # Callback query handlers
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
