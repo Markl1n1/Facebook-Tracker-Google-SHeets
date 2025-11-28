@@ -206,16 +206,16 @@ def get_add_field_keyboard(user_id: int):
     user_data = user_data_store.get(user_id, {})
     keyboard = []
     
-    # Обязательное поле
-    fullname_status = "✅" if user_data.get('fullname') else "❌"
+    # Обязательное поле - серый круг по умолчанию, зеленый круг когда заполнено
+    fullname_status = "🟢" if user_data.get('fullname') else "⚪"
     keyboard.append([InlineKeyboardButton(f"{fullname_status} Full Name (обязательно)", callback_data="add_field_fullname")])
     
-    # Обязательные идентификаторы (минимум один)
-    phone_status = "✅" if user_data.get('phone') else "❌"
-    fb_link_status = "✅" if user_data.get('facebook_link') else "❌"
-    telegram_status = "✅" if user_data.get('telegram_user') else "❌"
-    fb_username_status = "✅" if user_data.get('facebook_username') else "❌"
-    fb_id_status = "✅" if user_data.get('facebook_id') else "❌"
+    # Обязательные идентификаторы (минимум один) - серый круг по умолчанию, зеленый круг когда заполнено
+    phone_status = "🟢" if user_data.get('phone') else "⚪"
+    fb_link_status = "🟢" if user_data.get('facebook_link') else "⚪"
+    telegram_status = "🟢" if user_data.get('telegram_user') else "⚪"
+    fb_username_status = "🟢" if user_data.get('facebook_username') else "⚪"
+    fb_id_status = "🟢" if user_data.get('facebook_id') else "⚪"
     
     keyboard.append([InlineKeyboardButton(f"{phone_status} Phone", callback_data="add_field_phone")])
     keyboard.append([InlineKeyboardButton(f"{fb_link_status} Facebook Link", callback_data="add_field_fb_link")])
@@ -223,10 +223,10 @@ def get_add_field_keyboard(user_id: int):
     keyboard.append([InlineKeyboardButton(f"{fb_username_status} Facebook Username", callback_data="add_field_fb_username")])
     keyboard.append([InlineKeyboardButton(f"{fb_id_status} Facebook ID", callback_data="add_field_fb_id")])
     
-    # Опциональные поля
-    email_status = "✅" if user_data.get('email') else "⚪"
-    country_status = "✅" if user_data.get('country') else "⚪"
-    manager_status = "✅" if user_data.get('manager_name') else "⚪"
+    # Опциональные поля - серый круг по умолчанию, зеленый круг когда заполнено
+    email_status = "🟢" if user_data.get('email') else "⚪"
+    country_status = "🟢" if user_data.get('country') else "⚪"
+    manager_status = "🟢" if user_data.get('manager_name') else "⚪"
     
     keyboard.append([InlineKeyboardButton(f"{email_status} Email", callback_data="add_field_email")])
     keyboard.append([InlineKeyboardButton(f"{country_status} Country", callback_data="add_field_country")])
@@ -394,24 +394,42 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         
         if response.data and len(response.data) > 0:
             result = response.data[0]
-            fullname = result.get('fullname', 'Не указано')
-            manager_name = result.get('manager_name', 'Не указано')
-            created_at = result.get('created_at', 'Не указано')
             
-            # Format date
-            if created_at and created_at != 'Не указано':
-                try:
-                    dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                    created_at = dt.strftime('%d.%m.%Y %H:%M')
-                except:
-                    pass
+            # Field labels mapping (Russian)
+            field_labels = {
+                'fullname': 'Имя',
+                'phone': 'Телефон',
+                'email': 'Email',
+                'country': 'Страна',
+                'facebook_id': 'Facebook ID',
+                'facebook_username': 'Facebook Username',
+                'facebook_link': 'Facebook Link',
+                'telegram_user': 'Telegram',
+                'manager_name': 'Добавил',
+                'created_at': 'Дата'
+            }
             
-            message = (
-                f"✅ Клиент найден.\n"
-                f"Имя: {fullname}\n"
-                f"Добавил: {manager_name}\n"
-                f"Дата: {created_at}"
-            )
+            # Build message with all non-null fields (except id)
+            message_parts = ["✅ Клиент найден."]
+            
+            for field_name, field_label in field_labels.items():
+                value = result.get(field_name)
+                
+                # Skip if None, empty string, or 'Не указано'
+                if value is None or value == '' or value == 'Не указано':
+                    continue
+                
+                # Format date field
+                if field_name == 'created_at':
+                    try:
+                        dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+                        value = dt.strftime('%d.%m.%Y %H:%M')
+                    except:
+                        pass
+                
+                message_parts.append(f"{field_label}: {value}")
+            
+            message = "\n".join(message_parts)
         else:
             message = "❌ Клиент не найден."
         
@@ -666,8 +684,7 @@ def create_telegram_app():
     telegram_app.add_handler(CommandHandler("help", help_command))
     telegram_app.add_handler(CommandHandler("cancel", cancel_command))
     
-    # Add callback query handler for menu navigation buttons
-    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu)$"))
+    # Add callback query handler for menu navigation buttons    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu)$"))
     
     # Conversation handlers for checking
     check_telegram_conv = ConversationHandler(
