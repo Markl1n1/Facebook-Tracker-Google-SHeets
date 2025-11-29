@@ -569,6 +569,17 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         if DEBUG_MODE:
             logger.info(f"DEBUG: Checking phone, normalized: {search_value}")
     
+    # Normalize Facebook link if checking by facebook_link
+    elif field_name == "facebook_link":
+        # Use validate_facebook_link to normalize the link (same logic as when adding)
+        is_valid, error_msg, normalized = validate_facebook_link(search_value)
+        if not is_valid:
+            await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+            return current_state
+        search_value = normalized
+        if DEBUG_MODE:
+            logger.info(f"DEBUG: Checking facebook_link, normalized: {search_value}")
+    
     # Get Supabase client (for all fields, not just phone)
     client = get_supabase_client()
     if not client:
