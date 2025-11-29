@@ -1327,6 +1327,191 @@ def get_edit_field_keyboard(user_id: int):
     
     return InlineKeyboardMarkup(keyboard)
 
+# Edit field callbacks (must be defined before create_telegram_app)
+async def edit_field_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, field_name: str, field_label: str, next_state: int):
+    """Universal callback for editing field selection"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    # If field is already filled, ask if user wants to change it
+    if user_data_store.get(user_id, {}).get(field_name):
+        await query.edit_message_text(
+            f"📝 {field_label} текущее значение: {user_data_store[user_id][field_name]}\n"
+            f"Введите новое значение или отправьте /skip чтобы оставить текущее:"
+        )
+    else:
+        await query.edit_message_text(f"📝 Введите {field_label}:")
+    
+    context.user_data['current_field'] = field_name
+    context.user_data['current_state'] = next_state
+    return next_state
+
+async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Universal handler for edit field input (reuses add_field_input logic)"""
+    # Reuse the same validation logic as add_field_input
+    result = await add_field_input(update, context)
+    
+    # If validation passed, show edit menu again
+    user_id = update.effective_user.id
+    if user_id in user_data_store:
+        await update.message.reply_text(
+            "✏️ Выберите поле для редактирования:",
+            reply_markup=get_edit_field_keyboard(user_id)
+        )
+        return EDIT_MENU
+    return result
+
+async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save edited lead"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    user_data = user_data_store.get(user_id, {})
+    lead_id = context.user_data.get('editing_lead_id')
+    
+    if not lead_id:
+        await query.edit_message_text(
+            "❌ Ошибка: ID лида не найден.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    # Validation (same as add_save_callback)
+    if not user_data.get('fullname'):
+        await query.edit_message_text(
+            "❌ Ошибка: Full Name обязателен для заполнения!\n\n"
+            "Выберите поле для редактирования:",
+            reply_markup=get_edit_field_keyboard(user_id)
+        )
+        return EDIT_MENU
+    
+    if not user_data.get('manager_name'):
+        await query.edit_message_text(
+            "❌ Ошибка: Manager Name обязателен для заполнения!\n\n"
+            "Выберите поле для редактирования:",
+            reply_markup=get_edit_field_keyboard(user_id)
+        )
+        return EDIT_MENU
+    
+    # Check if at least one identifier is present
+    required_fields = ['phone', 'facebook_link', 'telegram_user', 'facebook_username', 'facebook_id']
+    has_identifier = any(user_data.get(field) for field in required_fields)
+    
+    if not has_identifier:
+        await query.edit_message_text(
+            "❌ Ошибка: Необходимо указать минимум одно из полей:\n"
+            "Phone, Facebook Link, Telegram, Facebook Username или Facebook ID!\n\n"
+            "Выберите поле для редактирования:",
+            reply_markup=get_edit_field_keyboard(user_id)
+        )
+        return EDIT_MENU
+    
+    # Get Supabase client
+    client = get_supabase_client()
+    if not client:
+        await query.edit_message_text(
+            "❌ Ошибка: Не удалось подключиться к базе данных.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        if user_id in user_data_store:
+            del user_data_store[user_id]
+        if user_id in user_data_store_access_time:
+            del user_data_store_access_time[user_id]
+        return ConversationHandler.END
+    
+    # Prepare update data (remove id and created_at)
+    update_data = {k: v for k, v in user_data.items() if k not in ['id', 'created_at']}
+    
+    # Normalize phone if present
+    if 'phone' in update_data and update_data['phone']:
+        update_data['phone'] = normalize_phone(update_data['phone'])
+    
+    try:
+        # Update lead in database
+        response = client.table(TABLE_NAME).update(update_data).eq("id", lead_id).execute()
+        
+        if response.data:
+            await query.edit_message_text(
+                "✅ Лид успешно обновлен!",
+                reply_markup=get_main_menu_keyboard()
+            )
+            logger.info(f"Updated lead {lead_id}: {update_data}")
+        else:
+            await query.edit_message_text(
+                "❌ Ошибка: Данные не были обновлены. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+    
+    except Exception as e:
+        logger.error(f"Error updating lead: {e}", exc_info=True)
+        error_msg = "❌ Произошла ошибка при обновлении данных."
+        if DEBUG_MODE:
+            error_msg += f"\n\nДетали: {str(e)}"
+        else:
+            error_msg += " Попробуйте позже или обратитесь к администратору."
+        await query.edit_message_text(
+            error_msg,
+            reply_markup=get_main_menu_keyboard()
+        )
+    
+    # Clean up
+    if user_id in user_data_store:
+        del user_data_store[user_id]
+    if user_id in user_data_store_access_time:
+        del user_data_store_access_time[user_id]
+    if 'editing_lead_id' in context.user_data:
+        del context.user_data['editing_lead_id']
+    
+    return ConversationHandler.END
+
+async def edit_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel editing lead"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    if user_id in user_data_store:
+        del user_data_store[user_id]
+    if user_id in user_data_store_access_time:
+        del user_data_store_access_time[user_id]
+    if 'editing_lead_id' in context.user_data:
+        del context.user_data['editing_lead_id']
+    
+    await query.edit_message_text(
+        "❌ Редактирование отменено.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    return ConversationHandler.END
+
+# Edit field callbacks
+async def edit_field_fullname_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'fullname', 'Full Name', EDIT_FULLNAME)
+
+async def edit_field_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'phone', 'Phone', EDIT_PHONE)
+
+async def edit_field_email_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'email', 'Email', EDIT_EMAIL)
+
+async def edit_field_country_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'country', 'Country', EDIT_COUNTRY)
+
+async def edit_field_fb_id_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'facebook_id', 'Facebook ID', EDIT_FB_ID)
+
+async def edit_field_fb_username_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'facebook_username', 'Facebook Username', EDIT_FB_USERNAME)
+
+async def edit_field_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'facebook_link', 'Facebook Link', EDIT_FB_LINK)
+
+async def edit_field_telegram_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'telegram_user', 'Telegram', EDIT_TELEGRAM_USER)
+
+async def edit_field_manager_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_callback(update, context, 'manager_name', 'Manager Name', EDIT_MANAGER_NAME)
+
 # Flask routes
 @app.route('/')
 def index():
