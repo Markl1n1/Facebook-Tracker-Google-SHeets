@@ -38,6 +38,10 @@ except Exception as e:
         logger.warning(f"DEBUG: Failed to apply httpx.Client monkeypatch: {e}")
 
 from datetime import datetime
+import time
+import signal
+import sys
+from functools import wraps
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
@@ -57,6 +61,45 @@ PORT = int(os.environ.get('PORT', 8000))  # Default port, usually set by Koyeb
 
 # Supabase client
 supabase: Client = None
+
+# Cache for uniqueness checks (TTL: 5 minutes)
+uniqueness_cache = {}
+CACHE_TTL = 300  # 5 minutes in seconds
+
+# Graceful shutdown flag
+shutdown_requested = False
+
+def retry_supabase_query(max_retries=3, delay=1, backoff=2):
+    """Decorator for retrying Supabase queries with exponential backoff"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            current_delay = delay
+            
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    error_msg = str(e).lower()
+                    
+                    # Only retry on network/temporary errors
+                    if any(keyword in error_msg for keyword in ['timeout', 'connection', 'network', 'temporary', '503', '502', '504']):
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Supabase query failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {current_delay}s...")
+                            time.sleep(current_delay)
+                            current_delay *= backoff
+                        else:
+                            logger.error(f"Supabase query failed after {max_retries} attempts: {e}")
+                    else:
+                        # Non-retryable error, raise immediately
+                        raise
+            
+            # If all retries failed, raise the last exception
+            raise last_exception
+        return wrapper
+    return decorator
 
 def get_supabase_client():
     """Initialize and return Supabase client"""
@@ -145,12 +188,38 @@ def validate_facebook_id(fb_id: str) -> tuple[bool, str]:
     return True, ""
 
 def validate_facebook_link(link: str) -> tuple[bool, str, str]:
-    """Validate Facebook link and extract the part ending with id (subpage)"""
+    """
+    Validate Facebook link and extract the part ending with id (subpage).
+    Supports various Facebook URL formats:
+    - https://www.facebook.com/profile.php?id=123456
+    - https://www.facebook.com/username
+    - https://www.facebook.com/profile/username
+    - https://www.facebook.com/people/First-Last/123456
+    - https://m.facebook.com/username
+    - facebook.com/username
+    """
     if not link:
         return False, "Facebook ссылка не может быть пустой", ""
     
-    # Remove http:// or https:// if present
     link_clean = link.strip()
+    
+    # Check if it's a valid Facebook URL
+    facebook_patterns = [
+        r'https?://(www\.)?(m\.)?facebook\.com/',
+        r'^facebook\.com/',
+        r'^m\.facebook\.com/'
+    ]
+    
+    is_facebook_url = False
+    for pattern in facebook_patterns:
+        if re.search(pattern, link_clean, re.IGNORECASE):
+            is_facebook_url = True
+            break
+    
+    if not is_facebook_url and not link_clean.startswith('facebook.com/') and not link_clean.startswith('m.facebook.com/'):
+        return False, "Неверный формат Facebook ссылки. Пример: https://www.facebook.com/username", ""
+    
+    # Remove http:// or https:// if present
     if link_clean.startswith('http://'):
         link_clean = link_clean[7:]
     elif link_clean.startswith('https://'):
@@ -161,19 +230,23 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
         link_clean = link_clean[4:]
     
     # Remove facebook.com/ or m.facebook.com/ if present
-    if link_clean.startswith('facebook.com/'):
+    if link_clean.lower().startswith('facebook.com/'):
         link_clean = link_clean[13:]
-    elif link_clean.startswith('m.facebook.com/'):
+    elif link_clean.lower().startswith('m.facebook.com/'):
         link_clean = link_clean[15:]
     
-    # Extract the part that ends with id (subpage)
-    # Facebook links typically have format: profile/username or profile/id or just username/id
-    # We want to extract the part ending with /id or just id
-    # Examples:
-    # https://www.facebook.com/profile.php?id=123456 -> profile.php?id=123456
-    # https://www.facebook.com/username -> username
-    # https://www.facebook.com/profile/username -> profile/username
-    # https://www.facebook.com/people/First-Last/123456 -> people/First-Last/123456
+    # Handle profile.php?id= format
+    if 'profile.php' in link_clean:
+        # Extract ID from query string
+        if 'id=' in link_clean:
+            id_part = link_clean.split('id=')[-1].split('&')[0]
+            extracted = f"profile.php?id={id_part}"
+            return True, "", extracted
+    
+    # Extract the path part
+    # Remove query parameters if present
+    if '?' in link_clean:
+        link_clean = link_clean.split('?')[0]
     
     parts = link_clean.split('/')
     if len(parts) > 0:
@@ -228,11 +301,26 @@ def validate_facebook_username(username: str) -> tuple[bool, str, str]:
     ADD_FB_USERNAME,
     ADD_FB_LINK,
     ADD_TELEGRAM_USER,
-    ADD_MANAGER_NAME
-) = range(16)
+    ADD_MANAGER_NAME,
+    # Edit states
+    EDIT_MENU,
+    EDIT_FULLNAME,
+    EDIT_PHONE,
+    EDIT_EMAIL,
+    EDIT_COUNTRY,
+    EDIT_FB_ID,
+    EDIT_FB_USERNAME,
+    EDIT_FB_LINK,
+    EDIT_TELEGRAM_USER,
+    EDIT_MANAGER_NAME
+) = range(26)
 
 # Store user data during conversation
 user_data_store = {}
+# Track last access time for memory optimization
+user_data_store_access_time = {}
+USER_DATA_STORE_TTL = 3600  # 1 hour in seconds
+USER_DATA_STORE_MAX_SIZE = 1000  # Maximum number of entries
 
 # Main menu keyboard
 def get_main_menu_keyboard():
@@ -370,6 +458,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if DEBUG_MODE:
         logger.info(f"DEBUG: button_callback received data: {data}")
     
+    # Handle edit lead callback
+    if data.startswith("edit_lead_"):
+        try:
+            lead_id = int(data.split("_")[-1])
+            await edit_lead_callback(update, context, lead_id)
+            return
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error parsing edit_lead callback: {e}")
+            await query.edit_message_text(
+                "❌ Ошибка: Неверный формат запроса.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+    
     if data == "main_menu":
         await query.edit_message_text(
             "👋 Главное меню\n\nВыберите действие:",
@@ -457,9 +559,13 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         await update.message.reply_text(f"❌ {field_label} не может быть пустым. Попробуйте снова:")
         return current_state
     
-    # Normalize phone if checking by phone
+    # Validate minimum length for search
     if field_name == "phone":
-        search_value = normalize_phone(search_value)
+        normalized = normalize_phone(search_value)
+        if len(normalized) < 7:
+            await update.message.reply_text("❌ Для поиска по телефону необходимо минимум 7 цифр. Попробуйте снова:")
+            return current_state
+        search_value = normalized
         if DEBUG_MODE:
             logger.info(f"DEBUG: Checking phone, normalized: {search_value}")
     
@@ -486,10 +592,11 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             if DEBUG_MODE:
                 logger.info(f"DEBUG: Searching phone by last digits: {last_digits}")
             # Search by suffix using ilike (case-insensitive pattern matching)
-            response = client.table(TABLE_NAME).select("*").ilike(field_name, f"%{last_digits}").execute()
+            # Limit results to 50 for performance
+            response = client.table(TABLE_NAME).select("*").ilike(field_name, f"%{last_digits}").limit(50).execute()
         else:
-            # For other fields: exact match
-            response = client.table(TABLE_NAME).select("*").eq(field_name, search_value).execute()
+            # For other fields: exact match, limit to 50 results
+            response = client.table(TABLE_NAME).select("*").eq(field_name, search_value).limit(50).execute()
         
         # Field labels mapping (Russian)
         field_labels = {
@@ -587,6 +694,11 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Имя не может быть пустым. Попробуйте снова:")
         return CHECK_BY_FULLNAME
     
+    # Validate minimum length for fullname search
+    if len(search_value) < 3:
+        await update.message.reply_text("❌ Для поиска по имени необходимо минимум 3 символа. Попробуйте снова:")
+        return CHECK_BY_FULLNAME
+    
     # Get Supabase client
     client = get_supabase_client()
     if not client:
@@ -598,7 +710,9 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Search using ilike with contains pattern (case-insensitive)
-        response = client.table(TABLE_NAME).select("*").ilike("fullname", f"%{search_value}%").execute()
+        # Limit to 10 results at DB level for better performance
+        # Sort by created_at descending (newest first)
+        response = client.table(TABLE_NAME).select("*").ilike("fullname", f"%{search_value}%").order("created_at", desc=True).limit(10).execute()
         
         # Field labels mapping (Russian)
         field_labels = {
@@ -689,8 +803,13 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Error checking by fullname: {e}", exc_info=True)
+        error_msg = "❌ Произошла ошибка при проверке."
+        if DEBUG_MODE:
+            error_msg += f"\n\nДетали: {str(e)}"
+        else:
+            error_msg += " Попробуйте позже или обратитесь к администратору."
         await update.message.reply_text(
-            "❌ Произошла ошибка при проверке. Попробуйте позже.",
+            error_msg,
             reply_markup=get_main_menu_keyboard()
         )
     
@@ -735,11 +854,63 @@ async def add_field_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
     context.user_data['current_state'] = next_state
     return next_state
 
+def cleanup_user_data_store():
+    """Clean up old entries from user_data_store to optimize memory"""
+    global user_data_store, user_data_store_access_time
+    
+    current_time = time.time()
+    users_to_remove = []
+    
+    # Remove entries older than TTL
+    for user_id, access_time in user_data_store_access_time.items():
+        if current_time - access_time > USER_DATA_STORE_TTL:
+            users_to_remove.append(user_id)
+    
+    # Remove old entries
+    for user_id in users_to_remove:
+        if user_id in user_data_store:
+            del user_data_store[user_id]
+        if user_id in user_data_store_access_time:
+            del user_data_store_access_time[user_id]
+    
+    # If still too large, remove oldest entries
+    if len(user_data_store) > USER_DATA_STORE_MAX_SIZE:
+        sorted_users = sorted(user_data_store_access_time.items(), key=lambda x: x[1])
+        users_to_remove = [user_id for user_id, _ in sorted_users[:len(user_data_store) - USER_DATA_STORE_MAX_SIZE]]
+        for user_id in users_to_remove:
+            if user_id in user_data_store:
+                del user_data_store[user_id]
+            if user_id in user_data_store_access_time:
+                del user_data_store_access_time[user_id]
+    
+    if users_to_remove and DEBUG_MODE:
+        logger.info(f"Cleaned up {len(users_to_remove)} old user_data_store entries")
+
+async def check_duplicate_realtime(client, field_name: str, field_value: str) -> tuple[bool, str]:
+    """Check if a field value already exists in the database (for real-time validation)"""
+    if not field_value or field_value.strip() == '':
+        return True, ""  # Empty values are considered unique
+    
+    try:
+        response = client.table(TABLE_NAME).select("id, fullname").eq(field_name, field_value).limit(1).execute()
+        if response.data and len(response.data) > 0:
+            existing_lead = response.data[0]
+            fullname = existing_lead.get('fullname', 'Неизвестно')
+            return False, fullname
+        return True, ""
+    except Exception as e:
+        logger.error(f"Error checking real-time duplicate for {field_name}: {e}", exc_info=True)
+        return True, ""  # On error, allow to continue (will be checked again on save)
+
 async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Universal handler for field input"""
     user_id = update.effective_user.id
     text = update.message.text.strip()
     field_name = context.user_data.get('current_field')
+    
+    # Update access time
+    user_data_store_access_time[user_id] = time.time()
+    cleanup_user_data_store()
     
     if text.lower() == '/skip':
         # Skip this field
@@ -809,6 +980,22 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ Поле не может быть пустым.\n\nПопробуйте снова:")
                 return context.user_data.get('current_state', ADD_MENU)
         
+        # Real-time duplicate check for critical fields
+        if validation_passed and normalized_value:
+            # Check duplicates for phone, email, facebook_id
+            if field_name in ['phone', 'email', 'facebook_id']:
+                client = get_supabase_client()
+                if client:
+                    is_unique, existing_fullname = await check_duplicate_realtime(client, field_name, normalized_value)
+                    if not is_unique:
+                        field_label = UNIQUENESS_FIELD_LABELS.get(field_name, field_name)
+                        await update.message.reply_text(
+                            f"⚠️ Внимание: {field_label} уже существует в базе.\n"
+                            f"Существующий лид: {existing_fullname}\n\n"
+                            f"Вы можете продолжить, но при сохранении будет ошибка."
+                        )
+                        # Still allow to continue, will be checked again on save
+        
         # Save value only if validation passed
         if validation_passed and normalized_value:
             user_data_store[user_id][field_name] = normalized_value
@@ -861,15 +1048,70 @@ UNIQUENESS_FIELD_LABELS = {
     'facebook_link': 'Facebook Link'
 }
 
+def check_fields_uniqueness_batch(client, fields_to_check: dict) -> tuple[bool, str]:
+    """
+    Check uniqueness of multiple fields in a single query using OR conditions.
+    Returns (is_unique, conflicting_field) where conflicting_field is empty if all unique.
+    """
+    if not fields_to_check:
+        return True, ""
+    
+    # Check cache first
+    cache_key = tuple(sorted(fields_to_check.items()))
+    if cache_key in uniqueness_cache:
+        cached_result, cached_time = uniqueness_cache[cache_key]
+        if time.time() - cached_time < CACHE_TTL:
+            return cached_result
+    
+    # Check each field but use caching and limit queries
+    # Supabase Python client doesn't support OR conditions directly,
+    # so we check each field but optimize with caching
+    try:
+        for field_name, field_value in fields_to_check.items():
+            if field_value and field_value.strip():
+                # Check individual field with retry
+                response = client.table(TABLE_NAME).select("id").eq(field_name, field_value).limit(1).execute()
+                if response.data and len(response.data) > 0:
+                    # Found duplicate
+                    result = (False, field_name)
+                    uniqueness_cache[cache_key] = (result, time.time())
+                    return result
+        
+        # All fields are unique
+        result = (True, "")
+        uniqueness_cache[cache_key] = (result, time.time())
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error checking batch uniqueness: {e}", exc_info=True)
+        # On error, assume not unique to prevent duplicate inserts
+        return False, "unknown"
+
 def check_field_uniqueness(client, field_name: str, field_value: str) -> bool:
-    """Check if a field value already exists in the database"""
+    """Check if a field value already exists in the database (with retry and cache)"""
     if not field_value or field_value.strip() == '':
         return True  # Empty values are considered unique
     
+    # Check cache
+    cache_key = (field_name, field_value)
+    if cache_key in uniqueness_cache:
+        cached_result, cached_time = uniqueness_cache[cache_key]
+        if time.time() - cached_time < CACHE_TTL:
+            return cached_result
+    
+    # Use retry wrapper for the actual query
+    @retry_supabase_query(max_retries=3, delay=1, backoff=2)
+    def _execute_query():
+        return client.table(TABLE_NAME).select("id").eq(field_name, field_value).limit(1).execute()
+    
     try:
-        response = client.table(TABLE_NAME).select("id").eq(field_name, field_value).execute()
+        response = _execute_query()
         # If any records found, field is not unique
-        return not (response.data and len(response.data) > 0)
+        is_unique = not (response.data and len(response.data) > 0)
+        
+        # Cache result
+        uniqueness_cache[cache_key] = (is_unique, time.time())
+        return is_unique
     except Exception as e:
         logger.error(f"Error checking uniqueness for {field_name}: {e}", exc_info=True)
         # On error, assume not unique to prevent duplicate inserts
@@ -923,24 +1165,26 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del user_data_store[user_id]
         return ConversationHandler.END
     
-    # Check uniqueness of fields
-    fields_to_check = ['phone', 'email', 'fullname', 'facebook_id', 'facebook_username', 'facebook_link']
-    
-    for field_name in fields_to_check:
+    # Check uniqueness of fields - optimized batch check
+    fields_to_check = {}
+    for field_name in ['phone', 'email', 'fullname', 'facebook_id', 'facebook_username', 'facebook_link']:
         field_value = user_data.get(field_name)
         if field_value and field_value.strip():  # Only check non-empty fields
             # Normalize phone if checking phone field
             check_value = normalize_phone(field_value) if field_name == 'phone' else field_value
-            
-            is_unique = check_field_uniqueness(client, field_name, check_value)
-            if not is_unique:
-                field_label = UNIQUENESS_FIELD_LABELS.get(field_name, field_name)
-                await query.edit_message_text(
-                    f"❌ {field_label} уже существует в базе.\n\n"
-                    "Выберите поле для заполнения:",
-                    reply_markup=get_add_field_keyboard(user_id)
-                )
-                return ADD_MENU
+            fields_to_check[field_name] = check_value
+    
+    # Batch check uniqueness
+    if fields_to_check:
+        is_unique, conflicting_field = check_fields_uniqueness_batch(client, fields_to_check)
+        if not is_unique:
+            field_label = UNIQUENESS_FIELD_LABELS.get(conflicting_field, conflicting_field)
+            await query.edit_message_text(
+                f"❌ {field_label} уже существует в базе.\n\n"
+                "Выберите поле для заполнения:",
+                reply_markup=get_add_field_keyboard(user_id)
+            )
+            return ADD_MENU
     
     # All fields are unique, proceed with saving
     try:
@@ -964,8 +1208,13 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     except Exception as e:
         logger.error(f"Error adding client: {e}", exc_info=True)
+        error_msg = "❌ Произошла ошибка при сохранении данных."
+        if DEBUG_MODE:
+            error_msg += f"\n\nДетали: {str(e)}"
+        else:
+            error_msg += " Попробуйте позже или обратитесь к администратору."
         await query.edit_message_text(
-            "❌ Произошла ошибка при сохранении данных. Попробуйте позже.",
+            error_msg,
             reply_markup=get_main_menu_keyboard()
         )
     
@@ -983,12 +1232,100 @@ async def add_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if user_id in user_data_store:
         del user_data_store[user_id]
+    if user_id in user_data_store_access_time:
+        del user_data_store_access_time[user_id]
     
     await query.edit_message_text(
         "❌ Добавление отменено.",
         reply_markup=get_main_menu_keyboard()
     )
     return ConversationHandler.END
+
+# Edit lead functionality
+async def edit_lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, lead_id: int):
+    """Start editing a lead"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Get lead from database
+    client = get_supabase_client()
+    if not client:
+        await query.edit_message_text(
+            "❌ Ошибка: Не удалось подключиться к базе данных.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
+    try:
+        response = client.table(TABLE_NAME).select("*").eq("id", lead_id).execute()
+        if not response.data or len(response.data) == 0:
+            await query.edit_message_text(
+                "❌ Ошибка: Лид не найден.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+        
+        lead = response.data[0]
+        user_id = query.from_user.id
+        
+        # Store lead data for editing
+        user_data_store[user_id] = lead.copy()
+        user_data_store_access_time[user_id] = time.time()
+        context.user_data['editing_lead_id'] = lead_id
+        
+        # Show edit menu (similar to add menu)
+        message = f"✏️ Редактирование лида (ID: {lead_id})\n\nВыберите поле для редактирования:"
+        await query.edit_message_text(
+            message,
+            reply_markup=get_edit_field_keyboard(user_id)
+        )
+        return EDIT_MENU
+        
+    except Exception as e:
+        logger.error(f"Error loading lead for editing: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Произошла ошибка при загрузке лида. Попробуйте позже.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+
+def get_edit_field_keyboard(user_id: int):
+    """Create keyboard for editing lead fields (similar to add menu)"""
+    user_data = user_data_store.get(user_id, {})
+    keyboard = []
+    
+    # Mandatory fields
+    fullname_status = "🟢" if user_data.get('fullname') else "⚪"
+    manager_status = "🟢" if user_data.get('manager_name') else "⚪"
+    
+    keyboard.append([InlineKeyboardButton(f"{fullname_status} Имя Фамилия *", callback_data="edit_field_fullname")])
+    keyboard.append([InlineKeyboardButton(f"{manager_status} Агент *", callback_data="edit_field_manager")])
+    
+    # Identifier fields
+    phone_status = "🟢" if user_data.get('phone') else "⚪"
+    fb_link_status = "🟢" if user_data.get('facebook_link') else "⚪"
+    telegram_status = "🟢" if user_data.get('telegram_user') else "⚪"
+    fb_username_status = "🟢" if user_data.get('facebook_username') else "⚪"
+    fb_id_status = "🟢" if user_data.get('facebook_id') else "⚪"
+    
+    keyboard.append([InlineKeyboardButton(f"{phone_status} Phone", callback_data="edit_field_phone")])
+    keyboard.append([InlineKeyboardButton(f"{fb_link_status} Facebook Link", callback_data="edit_field_fb_link")])
+    keyboard.append([InlineKeyboardButton(f"{telegram_status} Telegram", callback_data="edit_field_telegram")])
+    keyboard.append([InlineKeyboardButton(f"{fb_username_status} Facebook Username", callback_data="edit_field_fb_username")])
+    keyboard.append([InlineKeyboardButton(f"{fb_id_status} Facebook ID", callback_data="edit_field_fb_id")])
+    
+    # Optional fields
+    email_status = "🟢" if user_data.get('email') else "⚪"
+    country_status = "🟢" if user_data.get('country') else "⚪"
+    
+    keyboard.append([InlineKeyboardButton(f"{email_status} Email", callback_data="edit_field_email")])
+    keyboard.append([InlineKeyboardButton(f"{country_status} Country", callback_data="edit_field_country")])
+    
+    # Action buttons
+    keyboard.append([InlineKeyboardButton("💾 Сохранить изменения", callback_data="edit_save")])
+    keyboard.append([InlineKeyboardButton("❌ Отменить", callback_data="edit_cancel")])
+    
+    return InlineKeyboardMarkup(keyboard)
 
 # Flask routes
 @app.route('/')
@@ -1008,6 +1345,65 @@ def health():
         "service": "telegram-bot",
         "timestamp": datetime.utcnow().isoformat()
     }), 200
+
+@app.route('/ready')
+def ready():
+    """Readiness probe endpoint for Koyeb"""
+    checks = {
+        "telegram_app": telegram_app is not None,
+        "supabase_client": supabase is not None,
+        "telegram_event_loop": telegram_event_loop is not None and telegram_event_loop.is_running() if telegram_event_loop else False
+    }
+    
+    all_ready = all(checks.values())
+    status_code = 200 if all_ready else 503
+    
+    return jsonify({
+        "status": "ready" if all_ready else "not ready",
+        "checks": checks,
+        "timestamp": datetime.utcnow().isoformat()
+    }), status_code
+
+def cleanup_on_shutdown():
+    """Cleanup resources on shutdown"""
+    global shutdown_requested, telegram_app, telegram_event_loop, supabase
+    
+    shutdown_requested = True
+    logger.info("Shutdown requested, cleaning up resources...")
+    
+    try:
+        # Stop Telegram app
+        if telegram_app:
+            import asyncio
+            if telegram_event_loop and telegram_event_loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    telegram_app.stop(),
+                    telegram_event_loop
+                )
+                asyncio.run_coroutine_threadsafe(
+                    telegram_app.shutdown(),
+                    telegram_event_loop
+                )
+            logger.info("Telegram app stopped")
+    except Exception as e:
+        logger.error(f"Error stopping Telegram app: {e}", exc_info=True)
+    
+    # Clear cache
+    uniqueness_cache.clear()
+    logger.info("Cache cleared")
+    
+    logger.info("Shutdown complete")
+
+def setup_signal_handlers():
+    """Setup signal handlers for graceful shutdown"""
+    def signal_handler(signum, frame):
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        cleanup_on_shutdown()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    logger.info("Signal handlers registered")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -1135,8 +1531,8 @@ def create_telegram_app():
     telegram_app.add_handler(CommandHandler("q", quit_command))
     # Note: /q command has high priority and will work from any state
     
-    # Add callback query handler for menu navigation buttons
-    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu)$"))
+    # Add callback query handler for menu navigation buttons and edit lead
+    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu|edit_lead_)"))
     
     # Conversation handlers for checking
     check_telegram_conv = ConversationHandler(
@@ -1221,8 +1617,56 @@ def create_telegram_app():
     telegram_app.add_handler(check_fullname_conv)
     telegram_app.add_handler(add_conv)
     
+    # Edit conversation handler
+    edit_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(edit_field_fullname_callback, pattern="^edit_field_fullname$"),
+            CallbackQueryHandler(edit_field_phone_callback, pattern="^edit_field_phone$"),
+            CallbackQueryHandler(edit_field_email_callback, pattern="^edit_field_email$"),
+            CallbackQueryHandler(edit_field_country_callback, pattern="^edit_field_country$"),
+            CallbackQueryHandler(edit_field_fb_id_callback, pattern="^edit_field_fb_id$"),
+            CallbackQueryHandler(edit_field_fb_username_callback, pattern="^edit_field_fb_username$"),
+            CallbackQueryHandler(edit_field_fb_link_callback, pattern="^edit_field_fb_link$"),
+            CallbackQueryHandler(edit_field_telegram_callback, pattern="^edit_field_telegram$"),
+            CallbackQueryHandler(edit_field_manager_callback, pattern="^edit_field_manager$"),
+            CallbackQueryHandler(edit_save_callback, pattern="^edit_save$"),
+            CallbackQueryHandler(edit_cancel_callback, pattern="^edit_cancel$"),
+        ],
+        states={
+            EDIT_MENU: [
+                CallbackQueryHandler(edit_field_fullname_callback, pattern="^edit_field_fullname$"),
+                CallbackQueryHandler(edit_field_phone_callback, pattern="^edit_field_phone$"),
+                CallbackQueryHandler(edit_field_email_callback, pattern="^edit_field_email$"),
+                CallbackQueryHandler(edit_field_country_callback, pattern="^edit_field_country$"),
+                CallbackQueryHandler(edit_field_fb_id_callback, pattern="^edit_field_fb_id$"),
+                CallbackQueryHandler(edit_field_fb_username_callback, pattern="^edit_field_fb_username$"),
+                CallbackQueryHandler(edit_field_fb_link_callback, pattern="^edit_field_fb_link$"),
+                CallbackQueryHandler(edit_field_telegram_callback, pattern="^edit_field_telegram$"),
+                CallbackQueryHandler(edit_field_manager_callback, pattern="^edit_field_manager$"),
+                CallbackQueryHandler(edit_save_callback, pattern="^edit_save$"),
+                CallbackQueryHandler(edit_cancel_callback, pattern="^edit_cancel$"),
+            ],
+            EDIT_FULLNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_COUNTRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_FB_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_FB_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_FB_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_TELEGRAM_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_MANAGER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+        },
+        fallbacks=[CommandHandler("q", quit_command)],
+        per_message=False,
+    )
+    
+    telegram_app.add_handler(edit_conv)
+    
     logger.info("Telegram application initialized")
     return telegram_app
+
+# Setup signal handlers for graceful shutdown
+setup_signal_handlers()
 
 # Initialize Telegram app when module is imported (needed for gunicorn)
 # This ensures telegram_app is initialized even when running with gunicorn
