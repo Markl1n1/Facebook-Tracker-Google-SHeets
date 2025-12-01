@@ -150,6 +150,41 @@ def normalize_phone(phone: str) -> str:
     # Remove all non-digit characters
     return ''.join(filter(str.isdigit, phone))
 
+def normalize_email(email: str) -> str:
+    """Normalize email: trim spaces, convert to lowercase, remove invisible characters"""
+    if not email:
+        return ""
+    # Trim leading/trailing whitespace
+    normalized = email.strip()
+    # Convert to lowercase
+    normalized = normalized.lower()
+    # Remove any invisible/control characters (keep only printable characters)
+    normalized = ''.join(char for char in normalized if char.isprintable() or char.isspace())
+    # Remove any remaining spaces (email shouldn't have spaces)
+    normalized = normalized.replace(' ', '')
+    return normalized
+
+def normalize_telegram_id(tg_id: str) -> str:
+    """Normalize Telegram ID: extract only digits (similar to phone)"""
+    if not tg_id:
+        return ""
+    # Remove all non-digit characters
+    return ''.join(filter(str.isdigit, tg_id))
+
+def normalize_text_field(text: str) -> str:
+    """Normalize text field (fullname, manager_name): trim spaces, collapse multiple spaces"""
+    if not text:
+        return ""
+    # Trim leading/trailing whitespace
+    normalized = text.strip()
+    # Collapse multiple spaces into single space
+    normalized = ' '.join(normalized.split())
+    # Remove any control characters (keep only printable characters)
+    normalized = ''.join(char for char in normalized if char.isprintable() or char.isspace())
+    # Final trim after cleaning
+    normalized = normalized.strip()
+    return normalized
+
 def escape_html(text: str) -> str:
     """Escape HTML special characters"""
     if not text:
@@ -170,14 +205,19 @@ def validate_phone(phone: str) -> tuple[bool, str, str]:
         return False, "Номер телефона не может содержать более 15 цифр", ""
     return True, "", normalized
 
-def validate_email(email: str) -> tuple[bool, str]:
-    """Validate email format"""
+def validate_email(email: str) -> tuple[bool, str, str]:
+    """Validate email format and return normalized version"""
     if not email:
-        return False, "Email не может быть пустым"
+        return False, "Email не может быть пустым", ""
+    # Normalize email first
+    normalized = normalize_email(email)
+    if not normalized:
+        return False, "Email не может быть пустым", ""
+    # Validate format
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    if not re.match(pattern, email):
-        return False, "Неверный формат email. Пример: user@example.com"
-    return True, ""
+    if not re.match(pattern, normalized):
+        return False, "Неверный формат email. Пример: user@example.com", ""
+    return True, "", normalized
 
 def validate_facebook_id(fb_id: str) -> tuple[bool, str]:
     """Validate Facebook ID: only digits"""
@@ -329,26 +369,28 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
     return False, "Неверный формат Facebook ссылки", ""
 
 def validate_telegram_name(tg_name: str) -> tuple[bool, str, str]:
-    """Validate Telegram name: remove @ if present, check not empty"""
+    """Validate Telegram name: remove @ if present, remove all spaces, check not empty"""
     if not tg_name:
         return False, "Telegram Name не может быть пустым", ""
-    normalized = tg_name.strip()
-    if normalized.startswith('@'):
-        normalized = normalized[1:]
+    # Remove all spaces (not just trim)
+    normalized = tg_name.replace(' ', '').replace('\t', '').replace('\n', '')
+    # Remove all @ symbols (handle multiple @)
+    normalized = normalized.replace('@', '')
+    # Trim any remaining whitespace
+    normalized = normalized.strip()
     if not normalized:
         return False, "Telegram Name не может быть пустым", ""
     return True, "", normalized
 
-def validate_telegram_id(tg_id: str) -> tuple[bool, str]:
-    """Validate Telegram ID: only digits, minimum 1 digit"""
+def validate_telegram_id(tg_id: str) -> tuple[bool, str, str]:
+    """Validate Telegram ID: extract only digits, minimum 1 digit"""
     if not tg_id:
-        return False, "Telegram ID не может быть пустым"
-    normalized = tg_id.strip()
-    if not normalized.isdigit():
-        return False, "Telegram ID должен содержать только цифры"
-    if len(normalized) < 1:
-        return False, "Telegram ID должен содержать минимум 1 цифру"
-    return True, ""
+        return False, "Telegram ID не может быть пустым", ""
+    # Normalize: extract only digits
+    normalized = normalize_telegram_id(tg_id)
+    if not normalized:
+        return False, "Telegram ID должен содержать хотя бы одну цифру", ""
+    return True, "", normalized
 
 def get_field_format_requirements(field_name: str) -> str:
     """Get format requirements description for a field"""
@@ -757,13 +799,12 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
     
     # Validate and normalize email if checking by email
     elif field_name == "email":
-        # Validate email format
-        is_valid, error_msg = validate_email(search_value)
+        # Validate email format and get normalized version
+        is_valid, error_msg, normalized = validate_email(search_value)
         if not is_valid:
             await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
             return current_state
-        # Email is case-insensitive, normalize to lowercase
-        search_value = search_value.strip().lower()
+        search_value = normalized
         if DEBUG_MODE:
             logger.info(f"DEBUG: Checking email, normalized: {search_value}")
     
@@ -1132,9 +1173,10 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return current_state
     
     elif field_name == 'email':
-        is_valid, error_msg = validate_email(text)
+        is_valid, error_msg, normalized = validate_email(text)
         if is_valid:
             validation_passed = True
+            normalized_value = normalized
         else:
             field_label = get_field_label('email')
             requirements = get_field_format_requirements('email')
@@ -1176,10 +1218,10 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return current_state
     
     elif field_name == 'telegram_id':
-        is_valid, error_msg = validate_telegram_id(text)
+        is_valid, error_msg, normalized = validate_telegram_id(text)
         if is_valid:
             validation_passed = True
-            normalized_value = text.strip()
+            normalized_value = normalized
         else:
             field_label = get_field_label('telegram_id')
             requirements = get_field_format_requirements('telegram_id')
@@ -1191,9 +1233,15 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return current_state
     
     else:
-        # For other fields (fullname, manager_name), just check not empty
+        # For other fields (fullname, manager_name), normalize text and check not empty
         if text:
-            validation_passed = True
+            # Normalize text fields (fullname, manager_name)
+            normalized_value = normalize_text_field(text)
+            if normalized_value:
+                validation_passed = True
+            else:
+                # Text was only whitespace
+                validation_passed = False
         else:
             field_label = get_field_label(field_name)
             is_optional = field_name not in ['fullname', 'manager_name']
@@ -1835,9 +1883,10 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return context.user_data.get('current_state', EDIT_MENU)
     
     elif field_name == 'email':
-        is_valid, error_msg = validate_email(text)
+        is_valid, error_msg, normalized = validate_email(text)
         if is_valid:
             validation_passed = True
+            normalized_value = normalized
         else:
             await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
             return context.user_data.get('current_state', EDIT_MENU)
@@ -1861,18 +1910,24 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return context.user_data.get('current_state', EDIT_MENU)
     
     elif field_name == 'telegram_id':
-        is_valid, error_msg = validate_telegram_id(text)
+        is_valid, error_msg, normalized = validate_telegram_id(text)
         if is_valid:
             validation_passed = True
-            normalized_value = text.strip()
+            normalized_value = normalized
         else:
             await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
             return context.user_data.get('current_state', EDIT_MENU)
     
     else:
-        # For other fields (fullname, manager_name), just check not empty
+        # For other fields (fullname, manager_name), normalize text and check not empty
         if text:
-            validation_passed = True
+            # Normalize text fields (fullname, manager_name)
+            normalized_value = normalize_text_field(text)
+            if normalized_value:
+                validation_passed = True
+            else:
+                # Text was only whitespace
+                validation_passed = False
         else:
             await update.message.reply_text(f"❌ Поле не может быть пустым.\n\nПопробуйте снова:")
             return context.user_data.get('current_state', EDIT_MENU)
