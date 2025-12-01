@@ -1001,8 +1001,15 @@ async def check_duplicate_realtime(client, field_name: str, field_value: str) ->
     if not field_value or field_value.strip() == '':
         return True, ""  # Empty values are considered unique
     
+    # Map internal field names to database column names
+    FIELD_NAME_MAPPING = {
+        'telegram_name': 'telegram_user',  # Map telegram_name to telegram_user for database
+    }
+    
     try:
-        response = client.table(TABLE_NAME).select("id, fullname").eq(field_name, field_value).limit(1).execute()
+        # Map field name to database column name
+        db_field_name = FIELD_NAME_MAPPING.get(field_name, field_name)
+        response = client.table(TABLE_NAME).select("id, fullname").eq(db_field_name, field_value).limit(1).execute()
         if response.data and len(response.data) > 0:
             existing_lead = response.data[0]
             fullname = existing_lead.get('fullname', 'Неизвестно')
@@ -1256,6 +1263,11 @@ def check_fields_uniqueness_batch(client, fields_to_check: dict) -> tuple[bool, 
     if not fields_to_check:
         return True, ""
     
+    # Map internal field names to database column names
+    FIELD_NAME_MAPPING = {
+        'telegram_name': 'telegram_user',  # Map telegram_name to telegram_user for database
+    }
+    
     # Check cache first
     cache_key = tuple(sorted(fields_to_check.items()))
     if cache_key in uniqueness_cache:
@@ -1269,10 +1281,12 @@ def check_fields_uniqueness_batch(client, fields_to_check: dict) -> tuple[bool, 
     try:
         for field_name, field_value in fields_to_check.items():
             if field_value and field_value.strip():
+                # Map field name to database column name
+                db_field_name = FIELD_NAME_MAPPING.get(field_name, field_name)
                 # Check individual field with retry
-                response = client.table(TABLE_NAME).select("id").eq(field_name, field_value).limit(1).execute()
+                response = client.table(TABLE_NAME).select("id").eq(db_field_name, field_value).limit(1).execute()
                 if response.data and len(response.data) > 0:
-                    # Found duplicate
+                    # Found duplicate - return original field name for error message
                     result = (False, field_name)
                     uniqueness_cache[cache_key] = (result, time.time())
                     return result
