@@ -245,24 +245,49 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
         # Handle cases like:
         # - profile.php?id=123456
         # - profile.php?id=123456&ref=...
+        # - profile.php?id=123456] (with trailing characters)
+        # - profile.php?id=123456/extra/path (with additional paths)
         # - ?id=123456 (without profile.php)
         # - /people/Name/123456 (alternative format)
-        id_part = link_clean.split('id=')[-1].split('&')[0].split('#')[0].strip()
+        
+        # Extract everything after id=
+        id_part_raw = link_clean.split('id=')[-1]
+        
+        # Remove query parameters (&), hash fragments (#), and any trailing characters
+        # Extract only the numeric ID part, ignoring any non-digit characters after it
+        id_part = ""
+        for char in id_part_raw:
+            if char.isdigit():
+                id_part += char
+            elif char in ['&', '#', '?', '/', '\\', ']', '[', ')', '(', '}', '{', ' ', '\t', '\n']:
+                # Stop at first non-digit separator character
+                break
+            else:
+                # If we encounter a non-digit, non-separator character, it might be part of the ID
+                # But typically Facebook IDs are only digits, so we stop here
+                break
+        
         # Also check for alternative format: /people/Name/123456
-        if not id_part.isdigit() and '/' in link_clean:
+        if not id_part or not id_part.isdigit():
             # Try to extract ID from path like /people/Name/123456
             path_parts = link_clean.split('/')
             for part in reversed(path_parts):
-                if part.isdigit() and len(part) > 5:  # Facebook IDs are usually long numbers
-                    id_part = part
+                # Extract only digits from the part
+                digits_only = ''.join(filter(str.isdigit, part))
+                if digits_only and len(digits_only) > 5:  # Facebook IDs are usually long numbers
+                    id_part = digits_only
                     break
         
-        # Validate that ID contains only digits
-        if id_part.isdigit():
+        # Validate that ID contains only digits and has reasonable length
+        if id_part and id_part.isdigit() and len(id_part) >= 5:
             # Return ONLY the ID number, not profile.php?id=...
+            if DEBUG_MODE:
+                logger.info(f"DEBUG: Extracted Facebook ID: {id_part} from original link: {link_clean}")
             return True, "", id_part
         else:
-            return False, "Facebook ID должен содержать только цифры", ""
+            if DEBUG_MODE:
+                logger.warning(f"DEBUG: Failed to extract valid Facebook ID from link: {link_clean}, extracted part: {id_part}")
+            return False, "Не удалось извлечь Facebook ID из ссылки. Убедитесь, что ссылка содержит корректный ID.", ""
     
     # For username format: extract just the username (last part after /)
     # Remove query parameters if present
@@ -273,17 +298,34 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
     if '#' in link_clean:
         link_clean = link_clean.split('#')[0]
     
-    # Remove trailing slash
+    # Remove trailing slash and any trailing non-alphanumeric characters
     link_clean = link_clean.rstrip('/')
+    
+    # Remove any trailing brackets, parentheses, or other special characters
+    # Keep only alphanumeric, dots, underscores, and hyphens for username
+    while link_clean and not link_clean[-1].isalnum() and link_clean[-1] not in ['.', '_', '-']:
+        link_clean = link_clean[:-1]
     
     # Extract username (last part after /)
     parts = link_clean.split('/')
     if len(parts) > 0:
         # Get the last non-empty part (username)
         extracted = parts[-1] if parts[-1] else (parts[-2] if len(parts) > 1 else "")
+        
+        # Clean extracted username from any trailing special characters
         if extracted:
-            return True, "", extracted
+            # Remove any trailing non-alphanumeric characters (except dots, underscores, hyphens)
+            cleaned_username = extracted
+            while cleaned_username and not cleaned_username[-1].isalnum() and cleaned_username[-1] not in ['.', '_', '-']:
+                cleaned_username = cleaned_username[:-1]
+            
+            if cleaned_username:
+                if DEBUG_MODE:
+                    logger.info(f"DEBUG: Extracted Facebook username: {cleaned_username} from original link: {link_clean}")
+                return True, "", cleaned_username
     
+    if DEBUG_MODE:
+        logger.warning(f"DEBUG: Failed to extract Facebook username/ID from link: {link_clean}")
     return False, "Неверный формат Facebook ссылки", ""
 
 def validate_telegram_name(tg_name: str) -> tuple[bool, str, str]:
@@ -420,6 +462,7 @@ def get_navigation_keyboard(is_optional: bool = False, show_back: bool = True) -
     CHECK_BY_FB_LINK,
     CHECK_BY_TELEGRAM_ID,
     CHECK_BY_PHONE,
+    CHECK_BY_EMAIL,
     CHECK_BY_FULLNAME,
     # Add states (sequential flow)
     ADD_FULLNAME,
@@ -439,7 +482,7 @@ def get_navigation_keyboard(is_optional: bool = False, show_back: bool = True) -
     EDIT_TELEGRAM_NAME,
     EDIT_TELEGRAM_ID,
     EDIT_MANAGER_NAME
-) = range(21)
+) = range(22)
 
 # Store user data during conversation
 user_data_store = {}
@@ -465,6 +508,7 @@ def get_check_menu_keyboard():
         [InlineKeyboardButton("🔗 Facebook Link", callback_data="check_fb_link")],
         [InlineKeyboardButton("🆔 Telegram ID", callback_data="check_telegram_id")],
         [InlineKeyboardButton("🔢 Phone", callback_data="check_phone")],
+        [InlineKeyboardButton("📧 Email", callback_data="check_email")],
         [InlineKeyboardButton("👤 Full Name", callback_data="check_fullname")],
         [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
     ]
@@ -637,6 +681,13 @@ async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text("🔢 Введите номер телефона для проверки:")
     return CHECK_BY_PHONE
 
+async def check_email_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point for check by email conversation"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("📧 Введите email для проверки:")
+    return CHECK_BY_EMAIL
+
 async def check_fullname_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for check by fullname conversation"""
     query = update.callback_query
@@ -704,6 +755,18 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         if DEBUG_MODE:
             logger.info(f"DEBUG: Checking facebook_link, normalized: {search_value}")
     
+    # Validate and normalize email if checking by email
+    elif field_name == "email":
+        # Validate email format
+        is_valid, error_msg = validate_email(search_value)
+        if not is_valid:
+            await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+            return current_state
+        # Email is case-insensitive, normalize to lowercase
+        search_value = search_value.strip().lower()
+        if DEBUG_MODE:
+            logger.info(f"DEBUG: Checking email, normalized: {search_value}")
+    
     # Get Supabase client (for all fields, not just phone)
     client = get_supabase_client()
     if not client:
@@ -727,6 +790,7 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             if DEBUG_MODE:
                 logger.info(f"DEBUG: Searching phone by last digits: {last_digits}")
             # Search by suffix using ilike (case-insensitive pattern matching)
+            # For phone numbers, ilike works the same as like since they're numeric
             # Limit results to 50 for performance
             response = client.table(TABLE_NAME).select("*").ilike(db_field_name, f"%{last_digits}").limit(50).execute()
         else:
@@ -965,6 +1029,9 @@ async def check_telegram_id_input(update: Update, context: ContextTypes.DEFAULT_
 
 async def check_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await check_by_field(update, context, "phone", "Номер телефона", CHECK_BY_PHONE)
+
+async def check_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await check_by_field(update, context, "email", "Email", CHECK_BY_EMAIL)
 
 async def check_fullname_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await check_by_fullname(update, context)
@@ -2208,6 +2275,13 @@ def create_telegram_app():
         per_message=False,
     )
     
+    check_email_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_email_callback, pattern="^check_email$")],
+        states={CHECK_BY_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_email_input)]},
+        fallbacks=[CommandHandler("q", quit_command)],
+        per_message=False,
+    )
+    
     check_fullname_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fullname_callback, pattern="^check_fullname$")],
         states={CHECK_BY_FULLNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fullname_input)]},
@@ -2274,6 +2348,7 @@ def create_telegram_app():
     telegram_app.add_handler(check_fb_link_conv)
     telegram_app.add_handler(check_telegram_id_conv)
     telegram_app.add_handler(check_phone_conv)
+    telegram_app.add_handler(check_email_conv)
     telegram_app.add_handler(check_fullname_conv)
     telegram_app.add_handler(add_conv)
     
