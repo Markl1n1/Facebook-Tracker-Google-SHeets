@@ -191,6 +191,28 @@ def escape_html(text: str) -> str:
         return text
     return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
+def format_facebook_link_for_display(value: str) -> str:
+    """Format Facebook link value to full URL for display
+    
+    Args:
+        value: Facebook link value from database (can be ID or username)
+    
+    Returns:
+        Formatted Facebook URL
+    """
+    if not value:
+        return value
+    
+    value = str(value).strip()
+    
+    # Check if value is only digits (Facebook ID)
+    if value.isdigit():
+        # Format as profile.php?id=...
+        return f"www.facebook.com/profile.php?id={value}"
+    else:
+        # Format as username link
+        return f"www.facebook.com/{value}"
+
 def get_user_friendly_error(error: Exception, operation: str = "операция") -> str:
     """Convert technical errors to user-friendly messages"""
     error_str = str(error).lower()
@@ -897,6 +919,10 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
                             except:
                                 pass
                         
+                        # Format Facebook link to full URL
+                        if field_name_key == 'facebook_link':
+                            value = format_facebook_link_for_display(value)
+                        
                         # Format value in code tags for easy copying
                         escaped_value = escape_html(str(value))
                         message_parts.append(f"{field_label}: <code>{escaped_value}</code>")
@@ -919,6 +945,10 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
                             value = dt.strftime('%d.%m.%Y %H:%M')
                         except:
                             pass
+                    
+                    # Format Facebook link to full URL
+                    if field_name_key == 'facebook_link':
+                        value = format_facebook_link_for_display(value)
                     
                     # Format value in code tags for easy copying
                     escaped_value = escape_html(str(value))
@@ -1023,6 +1053,10 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             except:
                                 pass
                         
+                        # Format Facebook link to full URL
+                        if field_name_key == 'facebook_link':
+                            value = format_facebook_link_for_display(value)
+                        
                         # Format value in code tags for easy copying
                         escaped_value = escape_html(str(value))
                         message_parts.append(f"{field_label}: <code>{escaped_value}</code>")
@@ -1045,6 +1079,10 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             value = dt.strftime('%d.%m.%Y %H:%M')
                         except:
                             pass
+                    
+                    # Format Facebook link to full URL
+                    if field_name_key == 'facebook_link':
+                        value = format_facebook_link_for_display(value)
                     
                     # Format value in code tags for easy copying
                     escaped_value = escape_html(str(value))
