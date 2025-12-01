@@ -396,8 +396,7 @@ def get_navigation_keyboard(is_optional: bool = False, show_back: bool = True) -
     # Check states
     CHECK_BY_TELEGRAM,
     CHECK_BY_FB_LINK,
-    CHECK_BY_FB_USERNAME,
-    CHECK_BY_FB_ID,
+    CHECK_BY_TELEGRAM_ID,
     CHECK_BY_PHONE,
     CHECK_BY_FULLNAME,
     # Add states (sequential flow)
@@ -420,7 +419,7 @@ def get_navigation_keyboard(is_optional: bool = False, show_back: bool = True) -
     EDIT_TELEGRAM_NAME,
     EDIT_TELEGRAM_ID,
     EDIT_MANAGER_NAME
-) = range(24)
+) = range(22)
 
 # Store user data during conversation
 user_data_store = {}
@@ -442,10 +441,9 @@ def get_main_menu_keyboard():
 def get_check_menu_keyboard():
     """Create check menu keyboard with all search options"""
     keyboard = [
-        [InlineKeyboardButton("📱 Telegram", callback_data="check_telegram")],
+        [InlineKeyboardButton("📱 Telegram Name", callback_data="check_telegram")],
         [InlineKeyboardButton("🔗 Facebook Link", callback_data="check_fb_link")],
-        [InlineKeyboardButton("👤 Facebook Username", callback_data="check_fb_username")],
-        [InlineKeyboardButton("🆔 Facebook ID", callback_data="check_fb_id")],
+        [InlineKeyboardButton("🆔 Telegram ID", callback_data="check_telegram_id")],
         [InlineKeyboardButton("🔢 Phone", callback_data="check_phone")],
         [InlineKeyboardButton("👤 Full Name", callback_data="check_fullname")],
         [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
@@ -604,7 +602,7 @@ async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_
     """Entry point for check by telegram conversation"""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("📱 Введите Telegram username для проверки:")
+    await query.edit_message_text("📱 Введите Telegram Name для проверки:")
     return CHECK_BY_TELEGRAM
 
 async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -613,20 +611,6 @@ async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     await query.edit_message_text("🔗 Введите Facebook Link для проверки:")
     return CHECK_BY_FB_LINK
-
-async def check_fb_username_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry point for check by facebook username conversation"""
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("👤 Введите Facebook Username для проверки:")
-    return CHECK_BY_FB_USERNAME
-
-async def check_fb_id_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry point for check by facebook id conversation"""
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("🆔 Введите Facebook ID для проверки:")
-    return CHECK_BY_FB_ID
 
 async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for check by phone conversation"""
@@ -674,6 +658,14 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         await update.message.reply_text(f"❌ {field_label} не может быть пустым. Попробуйте снова:")
         return current_state
     
+    # Map internal field names to database column names
+    FIELD_NAME_MAPPING = {
+        'telegram_name': 'telegram_user',  # Map telegram_name to telegram_user for database
+    }
+    
+    # Get database column name
+    db_field_name = FIELD_NAME_MAPPING.get(field_name, field_name)
+    
     # Validate minimum length for search
     if field_name == "phone":
         normalized = normalize_phone(search_value)
@@ -706,7 +698,7 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
     
     try:
         # For phone: search by last 7-9 digits
-        if field_name == "phone":
+        if db_field_name == "phone":
             # Extract last 7-9 digits
             if len(search_value) >= 9:
                 last_digits = search_value[-9:]
@@ -719,21 +711,19 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
                 logger.info(f"DEBUG: Searching phone by last digits: {last_digits}")
             # Search by suffix using ilike (case-insensitive pattern matching)
             # Limit results to 50 for performance
-            response = client.table(TABLE_NAME).select("*").ilike(field_name, f"%{last_digits}").limit(50).execute()
+            response = client.table(TABLE_NAME).select("*").ilike(db_field_name, f"%{last_digits}").limit(50).execute()
         else:
             # For other fields: exact match, limit to 50 results
-            response = client.table(TABLE_NAME).select("*").eq(field_name, search_value).limit(50).execute()
+            response = client.table(TABLE_NAME).select("*").eq(db_field_name, search_value).limit(50).execute()
         
-        # Field labels mapping (Russian)
+        # Field labels mapping (Russian) - use database column names
         field_labels = {
             'fullname': 'Имя',
             'phone': 'Телефон',
             'email': 'Email',
             'country': 'Страна',
-            'facebook_id': 'Facebook ID',
-            'facebook_username': 'Facebook Username',
             'facebook_link': 'Facebook Link',
-            'telegram_name': 'Telegram Name',
+            'telegram_user': 'Telegram Name',  # Changed from telegram_name to telegram_user
             'telegram_id': 'Telegram ID',
             'manager_name': 'Добавил',
             'created_at': 'Дата'
@@ -847,10 +837,8 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'phone': 'Телефон',
             'email': 'Email',
             'country': 'Страна',
-            'facebook_id': 'Facebook ID',
-            'facebook_username': 'Facebook Username',
             'facebook_link': 'Facebook Link',
-            'telegram_name': 'Telegram Name',
+            'telegram_user': 'Telegram Name',  # Changed from telegram_name to telegram_user
             'telegram_id': 'Telegram ID',
             'manager_name': 'Добавил',
             'created_at': 'Дата'
@@ -945,16 +933,20 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Check input handlers
 async def check_telegram_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await check_by_field(update, context, "telegram_name", "Telegram Name", CHECK_BY_TELEGRAM)
+    return await check_by_field(update, context, "telegram_user", "Telegram Name", CHECK_BY_TELEGRAM)
 
 async def check_fb_link_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await check_by_field(update, context, "facebook_link", "Facebook Link", CHECK_BY_FB_LINK)
 
-async def check_fb_username_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await check_by_field(update, context, "facebook_username", "Facebook Username", CHECK_BY_FB_USERNAME)
+async def check_telegram_id_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point for check by telegram ID conversation"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("🆔 Введите Telegram ID для проверки:")
+    return CHECK_BY_TELEGRAM_ID
 
-async def check_fb_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await check_by_field(update, context, "facebook_id", "Facebook ID", CHECK_BY_FB_ID)
+async def check_telegram_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await check_by_field(update, context, "telegram_id", "Telegram ID", CHECK_BY_TELEGRAM_ID)
 
 async def check_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await check_by_field(update, context, "phone", "Номер телефона", CHECK_BY_PHONE)
@@ -1540,14 +1532,9 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             message = "\n".join(message_parts)
             
-            keyboard = [
-                [InlineKeyboardButton("➕ Добавить клиента", callback_data="add_new")],
-                [InlineKeyboardButton("🔍 Искать клиента", callback_data="check_menu")]
-            ]
-            
             await query.edit_message_text(
                 message,
-                reply_markup=InlineKeyboardMarkup(keyboard),
+                reply_markup=get_main_menu_keyboard(),
                 parse_mode='HTML'
             )
             logger.info(f"Added new client: {save_data}")
@@ -2165,16 +2152,9 @@ def create_telegram_app():
         per_message=False,
     )
     
-    check_fb_username_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(check_fb_username_callback, pattern="^check_fb_username$")],
-        states={CHECK_BY_FB_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_username_input)]},
-        fallbacks=[CommandHandler("q", quit_command)],
-        per_message=False,
-    )
-    
-    check_fb_id_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(check_fb_id_callback, pattern="^check_fb_id$")],
-        states={CHECK_BY_FB_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_id_input)]},
+    check_telegram_id_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_telegram_id_callback, pattern="^check_telegram_id$")],
+        states={CHECK_BY_TELEGRAM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_id_input)]},
         fallbacks=[CommandHandler("q", quit_command)],
         per_message=False,
     )
@@ -2256,8 +2236,7 @@ def create_telegram_app():
     # Register all handlers
     telegram_app.add_handler(check_telegram_conv)
     telegram_app.add_handler(check_fb_link_conv)
-    telegram_app.add_handler(check_fb_username_conv)
-    telegram_app.add_handler(check_fb_id_conv)
+    telegram_app.add_handler(check_telegram_id_conv)
     telegram_app.add_handler(check_phone_conv)
     telegram_app.add_handler(check_fullname_conv)
     telegram_app.add_handler(add_conv)
