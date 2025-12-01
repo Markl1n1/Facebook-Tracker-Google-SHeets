@@ -328,23 +328,29 @@ def get_field_format_requirements(field_name: str) -> str:
             "Примеры: 79001234567, 380501234567"
         ),
         'facebook_link': (
-            "⚠️ Требования к формату:\n"
-            "• Должен быть валидной Facebook ссылкой\n"
-            "• Может быть полная ссылка или username\n\n"
-            "Примеры: https://www.facebook.com/username, facebook.com/username"
+            "Примеры:\n"
+            "<code>https://example.com</code>\n"
+            "<code>http://site.ru</code>\n"
+            "<code>https://google.com/search?q=test</code>\n\n"
+            "⚠️ Ссылка должна начинаться с http:// или https://\n\n"
+            "❌ Важно: добавляйте только прямую ссылку на профиль (без фото, информации и прочих вкладок).\n\n"
+            "✅ Пример: <code>facebook.com/username</code>\n"
+            "❌ А не ссылки с лишними символами"
         ),
         'telegram_name': (
-            "⚠️ Требования к формату:\n"
-            "• Только текст (без @)\n"
-            "• Без пробелов\n\n"
-            "Примеры: username, myname"
+            "Примеры:\n"
+            "<code>username</code>\n"
+            "<code>Ivan_123</code>\n"
+            "<code>user123</code>\n\n"
+            "⚠️ Без символа @"
         ),
         'telegram_id': (
-            "⚠️ Требования к формату:\n"
-            "• Только цифры (без букв и символов)\n"
-            "• Без пробелов\n"
-            "• Минимум 1 цифра\n\n"
-            "Примеры: 12345, 789, 999888777"
+            "Примеры:\n"
+            "<code>123456789</code>\n"
+            "<code>987654321</code>\n"
+            "<code>555123456</code>\n\n"
+            "⚠️ Только цифры (без букв и символов)\n"
+            "⚠️ Без пробелов"
         ),
         'email': (
             "⚠️ Требования к формату:\n"
@@ -361,12 +367,12 @@ def get_field_format_requirements(field_name: str) -> str:
 def get_field_label(field_name: str) -> str:
     """Get Russian label for field"""
     labels = {
-        'fullname': 'Имя Фамилия',
-        'manager_name': 'Агент',
+        'fullname': 'имя клиента',
+        'manager_name': 'имя агента',
         'phone': 'Номер телефона',
-        'facebook_link': 'Facebook Link',
-        'telegram_name': 'Telegram Name',
-        'telegram_id': 'Telegram ID',
+        'facebook_link': 'ссылку клиента',
+        'telegram_name': 'username клиента',
+        'telegram_id': 'ID клиента',
         'email': 'Email',
         'country': 'Country'
     }
@@ -667,9 +673,8 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Start with first field: Full Name
     field_label = get_field_label('fullname')
-    requirements = get_field_format_requirements('fullname')
     
-    message = f"📝 Введите {field_label}:\n\n{requirements}"
+    message = f"📝 Введите {field_label}:"
     
     await query.edit_message_text(
         message,
@@ -1072,7 +1077,8 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             requirements = get_field_format_requirements('phone')
             await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
-                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True)
+                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
+                parse_mode='HTML'
             )
             return current_state
     
@@ -1085,7 +1091,8 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             requirements = get_field_format_requirements('email')
             await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
-                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True)
+                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
+                parse_mode='HTML'
             )
             return current_state
     
@@ -1099,7 +1106,8 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             requirements = get_field_format_requirements('facebook_link')
             await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
-                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True)
+                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
+                parse_mode='HTML'
             )
             return current_state
     
@@ -1113,7 +1121,8 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             requirements = get_field_format_requirements('telegram_name')
             await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
-                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True)
+                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
+                parse_mode='HTML'
             )
             return current_state
     
@@ -1127,7 +1136,8 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             requirements = get_field_format_requirements('telegram_id')
             await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
-                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True)
+                reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
+                parse_mode='HTML'
             )
             return current_state
     
@@ -1137,11 +1147,21 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             validation_passed = True
         else:
             field_label = get_field_label(field_name)
-            requirements = get_field_format_requirements(field_name)
             is_optional = field_name not in ['fullname', 'manager_name']
+            
+            # Для обязательных полей (fullname, manager_name) не показываем требования к формату
+            if field_name in ['fullname', 'manager_name']:
+                message = f"❌ Поле не может быть пустым.\n\n📝 Введите {field_label}:"
+                use_html = False
+            else:
+                requirements = get_field_format_requirements(field_name)
+                message = f"❌ Поле не может быть пустым.\n\n📝 Введите {field_label}:\n\n{requirements}"
+                use_html = True
+            
             await update.message.reply_text(
-                f"❌ Поле не может быть пустым.\n\n📝 Введите {field_label}:\n\n{requirements}",
-                reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=(field_name != 'fullname'))
+                message,
+                reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=(field_name != 'fullname')),
+                parse_mode='HTML' if use_html else None
             )
             return current_state
     
@@ -1175,24 +1195,33 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         # Show next field
         field_label = get_field_label(next_field)
-        requirements = get_field_format_requirements(next_field)
         is_optional = next_field not in ['fullname', 'manager_name']
         
-        message = f"📝 Введите {field_label}:\n\n{requirements}"
+        # Для обязательных полей (fullname, manager_name) не показываем требования к формату
+        if next_field in ['fullname', 'manager_name']:
+            message = f"📝 Введите {field_label}:"
+        else:
+            requirements = get_field_format_requirements(next_field)
+            message = f"📝 Введите {field_label}:\n\n{requirements}"
         
         context.user_data['current_field'] = next_field
         context.user_data['current_state'] = next_state
         
         # Работаем как с message, так и с callback_query
+        # Используем HTML parse_mode если есть требования к формату (содержат HTML теги)
+        use_html = next_field not in ['fullname', 'manager_name']
+        
         if update.callback_query:
             await update.callback_query.edit_message_text(
                 message,
-                reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True)
+                reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True),
+                parse_mode='HTML' if use_html else None
             )
         elif update.message:
             await update.message.reply_text(
                 message,
-                reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True)
+                reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True),
+                parse_mode='HTML' if use_html else None
             )
         return next_state
 
@@ -1370,17 +1399,25 @@ async def add_skip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         # Show next field
         field_label = get_field_label(next_field)
-        requirements = get_field_format_requirements(next_field)
         is_optional = next_field not in ['fullname', 'manager_name']
         
-        message = f"📝 Введите {field_label}:\n\n{requirements}"
+        # Для обязательных полей (fullname, manager_name) не показываем требования к формату
+        if next_field in ['fullname', 'manager_name']:
+            message = f"📝 Введите {field_label}:"
+        else:
+            requirements = get_field_format_requirements(next_field)
+            message = f"📝 Введите {field_label}:\n\n{requirements}"
         
         context.user_data['current_field'] = next_field
         context.user_data['current_state'] = next_state
         
+        # Используем HTML parse_mode если есть требования к формату
+        use_html = next_field not in ['fullname', 'manager_name']
+        
         await query.edit_message_text(
             message,
-            reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True)
+            reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True),
+            parse_mode='HTML' if use_html else None
         )
         return next_state
 
@@ -1415,17 +1452,25 @@ async def add_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if prev_field:
         field_label = get_field_label(prev_field)
-        requirements = get_field_format_requirements(prev_field)
         is_optional = prev_field not in ['fullname', 'manager_name']
         
-        message = f"📝 Введите {field_label}:\n\n{requirements}"
+        # Для обязательных полей (fullname, manager_name) не показываем требования к формату
+        if prev_field in ['fullname', 'manager_name']:
+            message = f"📝 Введите {field_label}:"
+        else:
+            requirements = get_field_format_requirements(prev_field)
+            message = f"📝 Введите {field_label}:\n\n{requirements}"
         
         context.user_data['current_field'] = prev_field
         context.user_data['current_state'] = prev_state
         
+        # Используем HTML parse_mode если есть требования к формату
+        use_html = prev_field not in ['fullname', 'manager_name']
+        
         await query.edit_message_text(
             message,
-            reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=(prev_field != 'fullname'))
+            reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=(prev_field != 'fullname')),
+            parse_mode='HTML' if use_html else None
         )
         return prev_state
     else:
@@ -1446,10 +1491,9 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Validation
     if not user_data.get('fullname'):
         field_label = get_field_label('fullname')
-        requirements = get_field_format_requirements('fullname')
         await query.edit_message_text(
             f"❌ Ошибка: {field_label} обязателен для заполнения!\n\n"
-            f"📝 Введите {field_label}:\n\n{requirements}",
+            f"📝 Введите {field_label}:",
             reply_markup=get_navigation_keyboard(is_optional=False, show_back=False)
         )
         context.user_data['current_field'] = 'fullname'
@@ -1458,10 +1502,9 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not user_data.get('manager_name'):
         field_label = get_field_label('manager_name')
-        requirements = get_field_format_requirements('manager_name')
         await query.edit_message_text(
             f"❌ Ошибка: {field_label} обязателен для заполнения!\n\n"
-            f"📝 Введите {field_label}:\n\n{requirements}",
+            f"📝 Введите {field_label}:",
             reply_markup=get_navigation_keyboard(is_optional=False, show_back=True)
         )
         context.user_data['current_field'] = 'manager_name'
