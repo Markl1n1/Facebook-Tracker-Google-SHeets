@@ -350,10 +350,6 @@ def get_field_format_requirements(field_name: str) -> str:
             "⚠️ Требования к формату:\n"
             "• Стандартный формат email\n\n"
             "Примеры: user@example.com"
-        ),
-        'country': (
-            "⚠️ Требования к формату:\n"
-            "• Поле не может быть пустым"
         )
     }
     return requirements.get(field_name, "")
@@ -367,8 +363,7 @@ def get_field_label(field_name: str) -> str:
         'facebook_link': 'ссылку клиента',
         'telegram_name': 'username клиента',
         'telegram_id': 'ID клиента',
-        'email': 'Email',
-        'country': 'Country'
+        'email': 'Email'
     }
     return labels.get(field_name, field_name)
 
@@ -382,7 +377,6 @@ def get_next_add_field(current_field: str) -> tuple[str, int]:
         ('telegram_name', ADD_TELEGRAM_NAME),
         ('telegram_id', ADD_TELEGRAM_ID),
         ('email', ADD_EMAIL),
-        ('country', ADD_COUNTRY),
     ]
     
     if not current_field:
@@ -435,19 +429,17 @@ def get_navigation_keyboard(is_optional: bool = False, show_back: bool = True) -
     ADD_TELEGRAM_NAME,
     ADD_TELEGRAM_ID,
     ADD_EMAIL,
-    ADD_COUNTRY,
     ADD_REVIEW,  # Review before saving
     # Edit states
     EDIT_MENU,
     EDIT_FULLNAME,
     EDIT_PHONE,
     EDIT_EMAIL,
-    EDIT_COUNTRY,
     EDIT_FB_LINK,
     EDIT_TELEGRAM_NAME,
     EDIT_TELEGRAM_ID,
     EDIT_MANAGER_NAME
-) = range(23)
+) = range(21)
 
 # Store user data during conversation
 user_data_store = {}
@@ -514,10 +506,8 @@ def get_add_field_keyboard(user_id: int):
     
     # Опциональные поля - серый круг по умолчанию, зеленый круг когда заполнено
     email_status = "🟢" if user_data.get('email') else "⚪"
-    country_status = "🟢" if user_data.get('country') else "⚪"
     
     keyboard.append([InlineKeyboardButton(f"{email_status} Email", callback_data="add_field_email")])
-    keyboard.append([InlineKeyboardButton(f"{country_status} Country", callback_data="add_field_country")])
     
     # Кнопки действий
     keyboard.append([InlineKeyboardButton("💾 Сохранить", callback_data="add_save")])
@@ -748,7 +738,6 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             'fullname': 'Имя',
             'phone': 'Телефон',
             'email': 'Email',
-            'country': 'Страна',
             'facebook_link': 'Facebook Link',
             'telegram_user': 'Telegram Name',  # Changed from telegram_name to telegram_user
             'telegram_id': 'Telegram ID',
@@ -863,7 +852,6 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'fullname': 'Имя',
             'phone': 'Телефон',
             'email': 'Email',
-            'country': 'Страна',
             'facebook_link': 'Facebook Link',
             'telegram_user': 'Telegram Name',  # Changed from telegram_name to telegram_user
             'telegram_id': 'Telegram ID',
@@ -1136,7 +1124,7 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return current_state
     
     else:
-        # For other fields (fullname, country, manager_name), just check not empty
+        # For other fields (fullname, manager_name), just check not empty
         if text:
             validation_passed = True
         else:
@@ -1233,8 +1221,7 @@ async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'facebook_link': 'Facebook Link',
         'telegram_name': 'Telegram Name',
         'telegram_id': 'Telegram ID',
-        'email': 'Email',
-        'country': 'Country'
+        'email': 'Email'
     }
     
     for field_name, field_label in field_labels.items():
@@ -1274,9 +1261,6 @@ async def add_field_phone_callback(update: Update, context: ContextTypes.DEFAULT
 
 async def add_field_email_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await add_field_callback(update, context, 'email', 'Email', ADD_EMAIL)
-
-async def add_field_country_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await add_field_callback(update, context, 'country', 'Country', ADD_COUNTRY)
 
 # Facebook ID and Username callbacks removed - using only Facebook Link now
 
@@ -1432,7 +1416,6 @@ async def add_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ('telegram_name', ADD_TELEGRAM_NAME),
         ('telegram_id', ADD_TELEGRAM_ID),
         ('email', ADD_EMAIL),
-        ('country', ADD_COUNTRY),
     ]
     
     prev_field = None
@@ -1579,8 +1562,7 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'facebook_link': 'Facebook Link',
                 'telegram_name': 'Telegram Name',
                 'telegram_id': 'Telegram ID',
-                'email': 'Email',
-                'country': 'Country'
+                'email': 'Email'
             }
             
             for field_name, field_label in field_labels.items():
@@ -1726,10 +1708,8 @@ def get_edit_field_keyboard(user_id: int):
     
     # Optional fields
     email_status = "🟢" if user_data.get('email') else "⚪"
-    country_status = "🟢" if user_data.get('country') else "⚪"
     
     keyboard.append([InlineKeyboardButton(f"{email_status} Email", callback_data="edit_field_email")])
-    keyboard.append([InlineKeyboardButton(f"{country_status} Country", callback_data="edit_field_country")])
     
     # Action buttons
     keyboard.append([InlineKeyboardButton("💾 Сохранить изменения", callback_data="edit_save")])
@@ -1823,7 +1803,7 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return context.user_data.get('current_state', EDIT_MENU)
     
     else:
-        # For other fields (fullname, country, manager_name), just check not empty
+        # For other fields (fullname, manager_name), just check not empty
         if text:
             validation_passed = True
         else:
@@ -1977,9 +1957,6 @@ async def edit_field_phone_callback(update: Update, context: ContextTypes.DEFAUL
 
 async def edit_field_email_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_callback(update, context, 'email', 'Email', EDIT_EMAIL)
-
-async def edit_field_country_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await edit_field_callback(update, context, 'country', 'Country', EDIT_COUNTRY)
 
 # Facebook ID and Username callbacks removed - using only Facebook Link now
 
@@ -2282,12 +2259,6 @@ def create_telegram_app():
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
             ],
-            ADD_COUNTRY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input),
-                CallbackQueryHandler(add_skip_callback, pattern="^add_skip$"),
-                CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
-                CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
-            ],
             ADD_REVIEW: [
                 CallbackQueryHandler(add_save_callback, pattern="^add_save$"),
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
@@ -2312,7 +2283,6 @@ def create_telegram_app():
             CallbackQueryHandler(edit_field_fullname_callback, pattern="^edit_field_fullname$"),
             CallbackQueryHandler(edit_field_phone_callback, pattern="^edit_field_phone$"),
             CallbackQueryHandler(edit_field_email_callback, pattern="^edit_field_email$"),
-            CallbackQueryHandler(edit_field_country_callback, pattern="^edit_field_country$"),
             CallbackQueryHandler(edit_field_fb_link_callback, pattern="^edit_field_fb_link$"),
             CallbackQueryHandler(edit_field_telegram_name_callback, pattern="^edit_field_telegram_name$"),
             CallbackQueryHandler(edit_field_telegram_id_callback, pattern="^edit_field_telegram_id$"),
@@ -2325,7 +2295,6 @@ def create_telegram_app():
                 CallbackQueryHandler(edit_field_fullname_callback, pattern="^edit_field_fullname$"),
                 CallbackQueryHandler(edit_field_phone_callback, pattern="^edit_field_phone$"),
                 CallbackQueryHandler(edit_field_email_callback, pattern="^edit_field_email$"),
-                CallbackQueryHandler(edit_field_country_callback, pattern="^edit_field_country$"),
                 CallbackQueryHandler(edit_field_fb_link_callback, pattern="^edit_field_fb_link$"),
                 CallbackQueryHandler(edit_field_telegram_name_callback, pattern="^edit_field_telegram_name$"),
                 CallbackQueryHandler(edit_field_telegram_id_callback, pattern="^edit_field_telegram_id$"),
@@ -2336,7 +2305,6 @@ def create_telegram_app():
             EDIT_FULLNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
             EDIT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
             EDIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
-            EDIT_COUNTRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
             EDIT_FB_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
             EDIT_TELEGRAM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
             EDIT_TELEGRAM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],

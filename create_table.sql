@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS facebook_leads (
     
     -- Дополнительные опциональные поля
     email TEXT,
-    country TEXT,
     
     -- Автоматическая дата создания
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
@@ -77,7 +76,6 @@ COMMENT ON COLUMN facebook_leads.facebook_link IS 'Ссылка на Facebook п
 COMMENT ON COLUMN facebook_leads.telegram_user IS 'Telegram username (без @)';
 COMMENT ON COLUMN facebook_leads.telegram_id IS 'Telegram ID (только цифры)';
 COMMENT ON COLUMN facebook_leads.email IS 'Email адрес';
-COMMENT ON COLUMN facebook_leads.country IS 'Страна';
 COMMENT ON COLUMN facebook_leads.created_at IS 'Дата и время создания записи';
 
 -- Представление для удобного просмотра данных (опционально)
@@ -91,7 +89,6 @@ SELECT
     telegram_user,
     telegram_id,
     email,
-    country,
     created_at,
     CASE 
         WHEN phone IS NOT NULL AND phone != '' THEN 'Phone'
