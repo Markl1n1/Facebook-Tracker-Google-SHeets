@@ -762,7 +762,11 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Universal check function
 async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, field_name: str, field_label: str, current_state: int):
     """Universal function to check by any field"""
+    if DEBUG_MODE:
+        logger.info(f"DEBUG: check_by_field called with field_name={field_name}, field_label={field_label}")
     search_value = update.message.text.strip()
+    if DEBUG_MODE:
+        logger.info(f"DEBUG: search_value (after strip)={search_value}")
     
     if not search_value:
         await update.message.reply_text(f"❌ {field_label} не может быть пустым. Попробуйте снова:")
@@ -808,6 +812,17 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         if DEBUG_MODE:
             logger.info(f"DEBUG: Checking email, normalized: {search_value}")
     
+    # Normalize Telegram Name if checking by telegram_user
+    elif field_name == "telegram_user":
+        # Use same normalization as when adding (remove @, spaces)
+        is_valid, error_msg, normalized = validate_telegram_name(search_value)
+        if not is_valid:
+            await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+            return current_state
+        search_value = normalized
+        if DEBUG_MODE:
+            logger.info(f"DEBUG: Checking telegram_user, normalized: {search_value}")
+    
     # Get Supabase client (for all fields, not just phone)
     client = get_supabase_client()
     if not client:
@@ -836,7 +851,11 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             response = client.table(TABLE_NAME).select("*").ilike(db_field_name, f"%{last_digits}").limit(50).execute()
         else:
             # For other fields: exact match, limit to 50 results
+            if DEBUG_MODE:
+                logger.info(f"DEBUG: Searching {db_field_name} with value: {search_value}")
             response = client.table(TABLE_NAME).select("*").eq(db_field_name, search_value).limit(50).execute()
+            if DEBUG_MODE:
+                logger.info(f"DEBUG: Query executed, response data length: {len(response.data) if response.data else 0}")
         
         # Field labels mapping (Russian) - use database column names
         field_labels = {
@@ -917,8 +936,11 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         
     except Exception as e:
         logger.error(f"Error checking by {field_name}: {e}", exc_info=True)
+        error_details = str(e)
+        if DEBUG_MODE:
+            logger.error(f"DEBUG: Full error details for {field_name}: {error_details}", exc_info=True)
         await update.message.reply_text(
-            "❌ Произошла ошибка при проверке. Попробуйте позже.",
+            f"❌ Произошла ошибка при проверке: {error_details[:100]}\n\nПопробуйте позже или обратитесь к администратору.",
             reply_markup=get_main_menu_keyboard()
         )
     
