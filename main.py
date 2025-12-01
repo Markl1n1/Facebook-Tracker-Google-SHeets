@@ -191,6 +191,45 @@ def escape_html(text: str) -> str:
         return text
     return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
+def get_user_friendly_error(error: Exception, operation: str = "операция") -> str:
+    """Convert technical errors to user-friendly messages"""
+    error_str = str(error).lower()
+    
+    # Database connection errors
+    if 'connection' in error_str or 'timeout' in error_str or 'network' in error_str:
+        return (
+            f"⚠️ Проблема с подключением к базе данных.\n\n"
+            f"ℹ️ Что можно сделать:\n"
+            f"• Проверьте интернет-соединение\n"
+            f"• Попробуйте через несколько секунд\n"
+            f"• Если проблема сохраняется, обратитесь к администратору"
+        )
+    
+    # Database query errors
+    if 'postgres' in error_str or 'database' in error_str or 'query' in error_str:
+        return (
+            f"⚠️ Ошибка при выполнении запроса к базе данных.\n\n"
+            f"ℹ️ Попробуйте:\n"
+            f"• Повторить операцию\n"
+            f"• Проверить правильность введенных данных"
+        )
+    
+    # Validation errors (already user-friendly)
+    if 'не может быть пустым' in error_str or 'неверный формат' in error_str:
+        return str(error)
+    
+    # Unknown errors
+    if DEBUG_MODE:
+        return f"❌ Ошибка при {operation}: {str(error)[:200]}"
+    else:
+        return (
+            f"❌ Произошла ошибка при {operation}.\n\n"
+            f"ℹ️ Попробуйте:\n"
+            f"• Повторить операцию\n"
+            f"• Проверить введенные данные\n"
+            f"• Обратиться к администратору, если проблема сохраняется"
+        )
+
 import re
 from urllib.parse import urlparse, parse_qs
 
@@ -218,14 +257,6 @@ def validate_email(email: str) -> tuple[bool, str, str]:
     if not re.match(pattern, normalized):
         return False, "Неверный формат email. Пример: user@example.com", ""
     return True, "", normalized
-
-def validate_facebook_id(fb_id: str) -> tuple[bool, str]:
-    """Validate Facebook ID: only digits"""
-    if not fb_id:
-        return False, "Facebook ID не может быть пустым"
-    if not fb_id.isdigit():
-        return False, "Facebook ID должен содержать только цифры"
-    return True, ""
 
 def validate_facebook_link(link: str) -> tuple[bool, str, str]:
     """
@@ -451,8 +482,8 @@ def get_field_label(field_name: str) -> str:
     }
     return labels.get(field_name, field_name)
 
-def get_next_add_field(current_field: str) -> tuple[str, int]:
-    """Get next field in the add flow"""
+def get_next_add_field(current_field: str) -> tuple[str, int, int, int]:
+    """Get next field in the add flow. Returns (field_name, state, current_step, total_steps)"""
     field_sequence = [
         ('fullname', ADD_FULLNAME),
         ('manager_name', ADD_MANAGER_NAME),
@@ -462,18 +493,19 @@ def get_next_add_field(current_field: str) -> tuple[str, int]:
         ('telegram_id', ADD_TELEGRAM_ID),
         ('email', ADD_EMAIL),
     ]
+    total_steps = len(field_sequence) + 1  # +1 for review step
     
     if not current_field:
-        return field_sequence[0]
+        return field_sequence[0][0], field_sequence[0][1], 1, total_steps
     
     for i, (field, state) in enumerate(field_sequence):
         if field == current_field:
             if i + 1 < len(field_sequence):
-                return field_sequence[i + 1]
+                return field_sequence[i + 1][0], field_sequence[i + 1][1], i + 2, total_steps
             else:
-                return ('review', ADD_REVIEW)
+                return ('review', ADD_REVIEW, total_steps, total_steps)
     
-    return field_sequence[0]
+    return field_sequence[0][0], field_sequence[0][1], 1, total_steps
 
 def get_navigation_keyboard(is_optional: bool = False, show_back: bool = True) -> InlineKeyboardMarkup:
     """Get navigation keyboard for field input"""
@@ -563,42 +595,6 @@ def get_add_menu_keyboard():
         [InlineKeyboardButton("➕ Добавить новый лид", callback_data="add_new")],
         [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
     ]
-    return InlineKeyboardMarkup(keyboard)
-
-def get_add_field_keyboard(user_id: int):
-    """Create keyboard for adding fields - shows which fields are already filled"""
-    user_data = user_data_store.get(user_id, {})
-    keyboard = []
-    
-    # Обязательные поля - серый круг по умолчанию, зеленый круг когда заполнено
-    fullname_status = "🟢" if user_data.get('fullname') else "⚪"
-    manager_status = "🟢" if user_data.get('manager_name') else "⚪"
-    
-    keyboard.append([InlineKeyboardButton(f"{fullname_status} Имя Фамилия *", callback_data="add_field_fullname")])
-    keyboard.append([InlineKeyboardButton(f"{manager_status} Агент *", callback_data="add_field_manager")])
-    
-    # Обязательные идентификаторы (минимум один) - серый круг по умолчанию, зеленый круг когда заполнено
-    phone_status = "🟢" if user_data.get('phone') else "⚪"
-    fb_link_status = "🟢" if user_data.get('facebook_link') else "⚪"
-    telegram_status = "🟢" if user_data.get('telegram_user') else "⚪"
-    fb_username_status = "🟢" if user_data.get('facebook_username') else "⚪"
-    fb_id_status = "🟢" if user_data.get('facebook_id') else "⚪"
-    
-    keyboard.append([InlineKeyboardButton(f"{phone_status} Phone", callback_data="add_field_phone")])
-    keyboard.append([InlineKeyboardButton(f"{fb_link_status} Facebook Link", callback_data="add_field_fb_link")])
-    keyboard.append([InlineKeyboardButton(f"{telegram_status} Telegram", callback_data="add_field_telegram")])
-    keyboard.append([InlineKeyboardButton(f"{fb_username_status} Facebook Username", callback_data="add_field_fb_username")])
-    keyboard.append([InlineKeyboardButton(f"{fb_id_status} Facebook ID", callback_data="add_field_fb_id")])
-    
-    # Опциональные поля - серый круг по умолчанию, зеленый круг когда заполнено
-    email_status = "🟢" if user_data.get('email') else "⚪"
-    
-    keyboard.append([InlineKeyboardButton(f"{email_status} Email", callback_data="add_field_email")])
-    
-    # Кнопки действий
-    keyboard.append([InlineKeyboardButton("💾 Сохранить", callback_data="add_save")])
-    keyboard.append([InlineKeyboardButton("❌ Отменить", callback_data="add_cancel")])
-    
     return InlineKeyboardMarkup(keyboard)
 
 # Command handlers
@@ -750,12 +746,14 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Start with first field: Full Name
     field_label = get_field_label('fullname')
+    _, _, current_step, total_steps = get_next_add_field('')
     
-    message = f"📝 Введите {field_label}:"
+    message = f"<b>Шаг {current_step} из {total_steps}</b>\n\n📝 Введите {field_label}:"
     
     await query.edit_message_text(
         message,
-        reply_markup=get_navigation_keyboard(is_optional=False, show_back=False)
+        reply_markup=get_navigation_keyboard(is_optional=False, show_back=False),
+        parse_mode='HTML'
     )
     return ADD_FULLNAME
 
@@ -826,9 +824,11 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
     # Get Supabase client (for all fields, not just phone)
     client = get_supabase_client()
     if not client:
+        error_msg = get_user_friendly_error(Exception("Database connection failed"), "подключении к базе данных")
         await update.message.reply_text(
-            "❌ Ошибка: Не удалось подключиться к базе данных.",
-            reply_markup=get_main_menu_keyboard()
+            error_msg,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='HTML'
         )
         return ConversationHandler.END
     
@@ -876,12 +876,12 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             
             # If multiple results, show all
             if len(results) > 1:
-                message_parts = [f"✅ Найдено клиентов: {len(results)}\n"]
+                message_parts = [f"✅ <b>Найдено клиентов: {len(results)}</b>\n"]
                 
                 for idx, result in enumerate(results, 1):
                     if idx > 1:
                         message_parts.append("")  # Empty line between leads
-                    message_parts.append(f"--- Клиент {idx} ---")
+                    message_parts.append(f"<b>━━━ Клиент {idx} ━━━</b>")
                     for field_name_key, field_label in field_labels.items():
                         value = result.get(field_name_key)
                         
@@ -903,7 +903,7 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             else:
                 # Single result
                 result = results[0]
-                message_parts = ["✅ Лид найден.", ""]  # Empty line after header
+                message_parts = ["✅ <b>Лид найден</b>", ""]  # Empty line after header
                 
                 for field_name_key, field_label in field_labels.items():
                     value = result.get(field_name_key)
@@ -926,7 +926,7 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             
             message = "\n".join(message_parts)
         else:
-            message = "❌ Клиент не найден."
+            message = "❌ <b>Клиент не найден</b>."
         
         await update.message.reply_text(
             message,
@@ -936,12 +936,11 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         
     except Exception as e:
         logger.error(f"Error checking by {field_name}: {e}", exc_info=True)
-        error_details = str(e)
-        if DEBUG_MODE:
-            logger.error(f"DEBUG: Full error details for {field_name}: {error_details}", exc_info=True)
+        error_msg = get_user_friendly_error(e, "проверке")
         await update.message.reply_text(
-            f"❌ Произошла ошибка при проверке: {error_details[:100]}\n\nПопробуйте позже или обратитесь к администратору.",
-            reply_markup=get_main_menu_keyboard()
+            error_msg,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='HTML'
         )
     
     return ConversationHandler.END
@@ -962,9 +961,11 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get Supabase client
     client = get_supabase_client()
     if not client:
+        error_msg = get_user_friendly_error(Exception("Database connection failed"), "подключении к базе данных")
         await update.message.reply_text(
-            "❌ Ошибка: Не удалось подключиться к базе данных.",
-            reply_markup=get_main_menu_keyboard()
+            error_msg,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='HTML'
         )
         return ConversationHandler.END
     
@@ -1001,12 +1002,12 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # If multiple results, show all
             if len(results) > 1:
-                message_parts = [f"✅ Найдено клиентов: {len(results)}\n"]
+                message_parts = [f"✅ <b>Найдено клиентов: {len(results)}</b>\n"]
                 
                 for idx, result in enumerate(results, 1):
                     if idx > 1:
                         message_parts.append("")  # Empty line between leads
-                    message_parts.append(f"--- Клиент {idx} ---")
+                    message_parts.append(f"<b>━━━ Клиент {idx} ━━━</b>")
                     for field_name_key, field_label in field_labels.items():
                         value = result.get(field_name_key)
                         
@@ -1028,7 +1029,7 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Single result
                 result = results[0]
-                message_parts = ["✅ Лид найден.", ""]  # Empty line after header
+                message_parts = ["✅ <b>Лид найден</b>", ""]  # Empty line after header
                 
                 for field_name_key, field_label in field_labels.items():
                     value = result.get(field_name_key)
@@ -1051,7 +1052,7 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             message = "\n".join(message_parts)
         else:
-            message = "❌ Клиент не найден."
+            message = "❌ <b>Клиент не найден</b>."
         
         await update.message.reply_text(
             message,
@@ -1305,42 +1306,43 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data_store[user_id][field_name] = normalized_value
     
     # Move to next field
-    next_field, next_state = get_next_add_field(field_name)
+    next_field, next_state, current_step, total_steps = get_next_add_field(field_name)
     
     if next_field == 'review':
         # Show review and save option
         await show_add_review(update, context)
         return ADD_REVIEW
     else:
-        # Show next field
+        # Show next field with progress indicator
         field_label = get_field_label(next_field)
         is_optional = next_field not in ['fullname', 'manager_name']
         
+        # Add progress indicator
+        progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
+        
         # Для обязательных полей (fullname, manager_name) не показываем требования к формату
         if next_field in ['fullname', 'manager_name']:
-            message = f"📝 Введите {field_label}:"
+            message = f"{progress_text}📝 Введите {field_label}:"
         else:
             requirements = get_field_format_requirements(next_field)
-            message = f"📝 Введите {field_label}:\n\n{requirements}"
+            message = f"{progress_text}📝 Введите {field_label}:\n\n{requirements}"
         
         context.user_data['current_field'] = next_field
         context.user_data['current_state'] = next_state
         
         # Работаем как с message, так и с callback_query
-        # Используем HTML parse_mode если есть требования к формату (содержат HTML теги)
-        use_html = next_field not in ['fullname', 'manager_name']
-        
+        # Always use HTML when progress indicator is present
         if update.callback_query:
             await update.callback_query.edit_message_text(
                 message,
                 reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True),
-                parse_mode='HTML' if use_html else None
+                parse_mode='HTML'
             )
         elif update.message:
             await update.message.reply_text(
                 message,
                 reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True),
-                parse_mode='HTML' if use_html else None
+                parse_mode='HTML'
             )
         return next_state
 
@@ -1349,7 +1351,7 @@ async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_data = user_data_store.get(user_id, {})
     
-    message_parts = ["✅ Проверьте введенные данные:\n"]
+    message_parts = ["✅ <b>Проверьте введенные данные:</b>\n"]
     
     field_labels = {
         'fullname': 'Имя Фамилия',
@@ -1388,26 +1390,6 @@ async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
         )
-
-# Specific field callbacks
-async def add_field_fullname_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await add_field_callback(update, context, 'fullname', 'Full Name', ADD_FULLNAME)
-
-async def add_field_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await add_field_callback(update, context, 'phone', 'Phone', ADD_PHONE)
-
-async def add_field_email_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await add_field_callback(update, context, 'email', 'Email', ADD_EMAIL)
-
-# Facebook ID and Username callbacks removed - using only Facebook Link now
-
-async def add_field_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await add_field_callback(update, context, 'facebook_link', 'Facebook Link', ADD_FB_LINK)
-
-# Old telegram callback removed - using sequential flow now
-
-async def add_field_manager_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await add_field_callback(update, context, 'manager_name', 'Manager Name', ADD_MANAGER_NAME)
 
 # Field labels for uniqueness check messages (Russian)
 UNIQUENESS_FIELD_LABELS = {
@@ -1568,23 +1550,24 @@ async def add_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         field_label = get_field_label(prev_field)
         is_optional = prev_field not in ['fullname', 'manager_name']
         
+        # Calculate step number for previous field
+        _, _, current_step, total_steps = get_next_add_field(prev_field)
+        progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
+        
         # Для обязательных полей (fullname, manager_name) не показываем требования к формату
         if prev_field in ['fullname', 'manager_name']:
-            message = f"📝 Введите {field_label}:"
+            message = f"{progress_text}📝 Введите {field_label}:"
         else:
             requirements = get_field_format_requirements(prev_field)
-            message = f"📝 Введите {field_label}:\n\n{requirements}"
+            message = f"{progress_text}📝 Введите {field_label}:\n\n{requirements}"
         
         context.user_data['current_field'] = prev_field
         context.user_data['current_state'] = prev_state
         
-        # Используем HTML parse_mode если есть требования к формату
-        use_html = prev_field not in ['fullname', 'manager_name']
-        
         await query.edit_message_text(
             message,
             reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=(prev_field != 'fullname')),
-            parse_mode='HTML' if use_html else None
+            parse_mode='HTML'
         )
         return prev_state
     else:
@@ -1605,10 +1588,13 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Validation
     if not user_data.get('fullname'):
         field_label = get_field_label('fullname')
+        _, _, current_step, total_steps = get_next_add_field('')
+        progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         await query.edit_message_text(
-            f"❌ Ошибка: {field_label} обязателен для заполнения!\n\n"
+            f"{progress_text}❌ <b>Ошибка:</b> {field_label} обязателен для заполнения!\n\n"
             f"📝 Введите {field_label}:",
-            reply_markup=get_navigation_keyboard(is_optional=False, show_back=False)
+            reply_markup=get_navigation_keyboard(is_optional=False, show_back=False),
+            parse_mode='HTML'
         )
         context.user_data['current_field'] = 'fullname'
         context.user_data['current_state'] = ADD_FULLNAME
@@ -1616,10 +1602,13 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not user_data.get('manager_name'):
         field_label = get_field_label('manager_name')
+        _, _, current_step, total_steps = get_next_add_field('fullname')
+        progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         await query.edit_message_text(
-            f"❌ Ошибка: {field_label} обязателен для заполнения!\n\n"
+            f"{progress_text}❌ <b>Ошибка:</b> {field_label} обязателен для заполнения!\n\n"
             f"📝 Введите {field_label}:",
-            reply_markup=get_navigation_keyboard(is_optional=False, show_back=True)
+            reply_markup=get_navigation_keyboard(is_optional=False, show_back=True),
+            parse_mode='HTML'
         )
         context.user_data['current_field'] = 'manager_name'
         context.user_data['current_state'] = ADD_MANAGER_NAME
@@ -1631,19 +1620,25 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not has_identifier:
         await query.edit_message_text(
-            "❌ Ошибка: Необходимо указать минимум одно из полей:\n"
-            "Phone, Facebook Link, Telegram Name или Telegram ID!\n\n"
-            "Начнем с первого опционального поля:",
-            reply_markup=get_main_menu_keyboard()
+            "❌ <b>Ошибка:</b> Необходимо указать минимум одно из полей:\n\n"
+            "• Phone\n"
+            "• Facebook Link\n"
+            "• Telegram Name\n"
+            "• Telegram ID\n\n"
+            "ℹ️ Начнем с первого опционального поля:",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='HTML'
         )
         return ConversationHandler.END
     
     # Get Supabase client for uniqueness check
     client = get_supabase_client()
     if not client:
+        error_msg = get_user_friendly_error(Exception("Database connection failed"), "подключении к базе данных")
         await query.edit_message_text(
-            "❌ Ошибка: Не удалось подключиться к базе данных.",
-            reply_markup=get_main_menu_keyboard()
+            error_msg,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='HTML'
         )
         if user_id in user_data_store:
             del user_data_store[user_id]
@@ -1664,9 +1659,10 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_unique:
             field_label = UNIQUENESS_FIELD_LABELS.get(conflicting_field, conflicting_field)
             await query.edit_message_text(
-                f"❌ {field_label} уже существует в базе.\n\n"
-                "Попробуйте добавить лид заново.",
-                reply_markup=get_main_menu_keyboard()
+                f"❌ <b>Ошибка:</b> {field_label} уже существует в базе.\n\n"
+                "ℹ️ Попробуйте добавить лид заново с другими данными.",
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode='HTML'
             )
             if user_id in user_data_store:
                 del user_data_store[user_id]
@@ -1691,7 +1687,7 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if response.data:
             # Show success message with entered data
-            message_parts = ["✅ Клиент успешно добавлен!\n"]
+            message_parts = ["✅ <b>Клиент успешно добавлен!</b>\n"]
             field_labels = {
                 'fullname': 'Имя Фамилия',
                 'manager_name': 'Агент',
@@ -1724,20 +1720,19 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Added new client: {save_data}")
         else:
             await query.edit_message_text(
-                "❌ Ошибка: Данные не были сохранены. Попробуйте снова.",
-                reply_markup=get_main_menu_keyboard()
+                "❌ <b>Ошибка:</b> Данные не были сохранены.\n\n"
+                "ℹ️ Попробуйте снова или обратитесь к администратору.",
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode='HTML'
             )
     
     except Exception as e:
         logger.error(f"Error adding client: {e}", exc_info=True)
-        error_msg = "❌ Произошла ошибка при сохранении данных."
-        if DEBUG_MODE:
-            error_msg += f"\n\nДетали: {str(e)}"
-        else:
-            error_msg += " Попробуйте позже или обратитесь к администратору."
+        error_msg = get_user_friendly_error(e, "сохранении данных")
         await query.edit_message_text(
             error_msg,
-            reply_markup=get_main_menu_keyboard()
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='HTML'
         )
     
     # Clean up
