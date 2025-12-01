@@ -329,13 +329,8 @@ def get_field_format_requirements(field_name: str) -> str:
         ),
         'facebook_link': (
             "Примеры:\n"
-            "<code>https://example.com</code>\n"
-            "<code>http://site.ru</code>\n"
-            "<code>https://google.com/search?q=test</code>\n\n"
-            "⚠️ Ссылка должна начинаться с http:// или https://\n\n"
-            "❌ Важно: добавляйте только прямую ссылку на профиль (без фото, информации и прочих вкладок).\n\n"
-            "✅ Пример: <code>facebook.com/username</code>\n"
-            "❌ А не ссылки с лишними символами"
+            "<code>https://www.facebook.com/username</code>\n"
+            "<code>https://www.facebook.com/profile.php?id=61574753938463</code>"
         ),
         'telegram_name': (
             "Примеры:\n"
@@ -347,9 +342,8 @@ def get_field_format_requirements(field_name: str) -> str:
         'telegram_id': (
             "Примеры:\n"
             "<code>123456789</code>\n"
-            "<code>987654321</code>\n"
             "<code>555123456</code>\n\n"
-            "⚠️ Только цифры (без букв и символов)\n"
+            "⚠️ Только цифры\n"
             "⚠️ Без пробелов"
         ),
         'email': (
