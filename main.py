@@ -4,13 +4,11 @@ import os
 os.environ.setdefault("NO_PROXY", "*")
 os.environ.setdefault("HTTPX_NO_PROXY", "1")
 
-# Configure logging
+# Configure logging - only errors and warnings in production
 import logging
-DEBUG_MODE = os.environ.get('DEBUG', 'false').lower() == 'true'
-log_level = logging.DEBUG if DEBUG_MODE else logging.INFO
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=log_level
+    level=logging.WARNING
 )
 logger = logging.getLogger(__name__)
 
@@ -24,18 +22,13 @@ try:
     def patched_httpx_client_init(self, *args, **kwargs):
         """Patched httpx.Client.__init__ to remove proxy argument"""
         if 'proxy' in kwargs:
-            if DEBUG_MODE:
-                logger.warning(f"DEBUG: httpx.Client.__init__ called with proxy={kwargs['proxy']}, removing it")
             kwargs.pop('proxy')
         return original_httpx_client_init(self, *args, **kwargs)
     
     # Apply monkeypatch
     httpx.Client.__init__ = patched_httpx_client_init
-    if DEBUG_MODE:
-        logger.info("DEBUG: httpx.Client monkeypatch applied successfully")
-except Exception as e:
-    if DEBUG_MODE:
-        logger.warning(f"DEBUG: Failed to apply httpx.Client monkeypatch: {e}")
+except Exception:
+    pass
 
 from datetime import datetime
 import time
@@ -59,7 +52,7 @@ SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 TABLE_NAME = os.environ.get('TABLE_NAME', 'facebook_leads')  # Default table name
 PORT = int(os.environ.get('PORT', 8000))  # Default port, usually set by Koyeb
 
-# Supabase client
+# Supabase client - thread-safe, can be used concurrently by multiple users
 supabase: Client = None
 
 # Cache for uniqueness checks (TTL: 5 minutes)
@@ -106,9 +99,6 @@ def get_supabase_client():
     global supabase
     if supabase is None:
         try:
-            if DEBUG_MODE:
-                logger.info("DEBUG: Starting Supabase client initialization...")
-            
             if not SUPABASE_KEY:
                 logger.error("SUPABASE_KEY not found in environment variables")
                 return None
@@ -117,27 +107,7 @@ def get_supabase_client():
                 logger.error("SUPABASE_URL not found in environment variables")
                 return None
             
-            # Create Supabase client - environment variables are set at module level to prevent proxy issues
             supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-            
-            logger.info("Supabase client initialized successfully")
-        except TypeError as e:
-            error_msg = str(e)
-            if DEBUG_MODE:
-                logger.error(f"DEBUG: TypeError in get_supabase_client: {error_msg}")
-                logger.error(f"DEBUG: Error type: {type(e)}")
-                logger.error(f"DEBUG: Error args: {e.args}")
-                if "proxy" in error_msg.lower():
-                    logger.error("DEBUG: Proxy-related error detected!")
-                    try:
-                        import inspect
-                        import httpx
-                        sig = inspect.signature(httpx.Client.__init__)
-                        logger.error(f"DEBUG: httpx.Client.__init__ signature: {sig}")
-                    except Exception:
-                        pass
-            logger.error(f"Error initializing Supabase client: {e}", exc_info=True)
-            return None
         except Exception as e:
             logger.error(f"Error initializing Supabase client: {e}", exc_info=True)
             return None
@@ -227,16 +197,13 @@ def get_user_friendly_error(error: Exception, operation: str = "операция
         return str(error)
     
     # Unknown errors
-    if DEBUG_MODE:
-        return f"❌ Ошибка при {operation}: {str(error)[:200]}"
-    else:
-        return (
-            f"❌ Произошла ошибка при {operation}.\n\n"
-            f"ℹ️ Попробуйте:\n"
-            f"• Повторить операцию\n"
-            f"• Проверить введенные данные\n"
-            f"• Обратиться к администратору, если проблема сохраняется"
-        )
+    return (
+        f"❌ Произошла ошибка при {operation}.\n\n"
+        f"ℹ️ Попробуйте:\n"
+        f"• Повторить операцию\n"
+        f"• Проверить введенные данные\n"
+        f"• Обратиться к администратору, если проблема сохраняется"
+    )
 
 import re
 from urllib.parse import urlparse, parse_qs
@@ -366,13 +333,8 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
         
         # Validate that ID contains only digits and has reasonable length
         if id_part and id_part.isdigit() and len(id_part) >= 5:
-            # Return ONLY the ID number, not profile.php?id=...
-            if DEBUG_MODE:
-                logger.info(f"DEBUG: Extracted Facebook ID: {id_part} from original link: {link_clean}")
             return True, "", id_part
         else:
-            if DEBUG_MODE:
-                logger.warning(f"DEBUG: Failed to extract valid Facebook ID from link: {link_clean}, extracted part: {id_part}")
             return False, "Не удалось извлечь Facebook ID из ссылки. Убедитесь, что ссылка содержит корректный ID.", ""
     
     # For username format: extract just the username (last part after /)
@@ -406,12 +368,8 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
                 cleaned_username = cleaned_username[:-1]
             
             if cleaned_username:
-                if DEBUG_MODE:
-                    logger.info(f"DEBUG: Extracted Facebook username: {cleaned_username} from original link: {link_clean}")
                 return True, "", cleaned_username
     
-    if DEBUG_MODE:
-        logger.warning(f"DEBUG: Failed to extract Facebook username/ID from link: {link_clean}")
     error_msg = (
         "❌ Неверный формат Facebook ссылки.\n\n"
         "📋 Примеры допустимых вариантов:\n"
@@ -426,7 +384,7 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
 def validate_telegram_name(tg_name: str) -> tuple[bool, str, str]:
     """Validate Telegram name: remove @ if present, remove all spaces, check not empty"""
     if not tg_name:
-        return False, "Telegram Name не может быть пустым", ""
+        return False, "Имя пользователя Telegram не может быть пустым", ""
     # Remove all spaces (not just trim)
     normalized = tg_name.replace(' ', '').replace('\t', '').replace('\n', '')
     # Remove all @ symbols (handle multiple @)
@@ -434,7 +392,7 @@ def validate_telegram_name(tg_name: str) -> tuple[bool, str, str]:
     # Trim any remaining whitespace
     normalized = normalized.strip()
     if not normalized:
-        return False, "Telegram Name не может быть пустым", ""
+        return False, "Имя пользователя Telegram не может быть пустым", ""
     return True, "", normalized
 
 def validate_telegram_id(tg_id: str) -> tuple[bool, str, str]:
@@ -544,7 +502,6 @@ def get_navigation_keyboard(is_optional: bool = False, show_back: bool = True) -
     
     return InlineKeyboardMarkup(keyboard)
 
-# Facebook username validation removed - using only Facebook Link now
 
 # Conversation states
 (
@@ -572,9 +529,9 @@ def get_navigation_keyboard(is_optional: bool = False, show_back: bool = True) -
     EDIT_MANAGER_NAME
 ) = range(19)
 
-# Store user data during conversation
+# Store user data during conversation - isolated per user_id for concurrent access
+# Each user's data is stored separately, allowing 10+ managers to work simultaneously
 user_data_store = {}
-# Track last access time for memory optimization
 user_data_store_access_time = {}
 USER_DATA_STORE_TTL = 3600  # 1 hour in seconds
 USER_DATA_STORE_MAX_SIZE = 1000  # Maximum number of entries
@@ -592,11 +549,11 @@ def get_main_menu_keyboard():
 def get_check_menu_keyboard():
     """Create check menu keyboard with all search options"""
     keyboard = [
-        [InlineKeyboardButton("📱 Telegram Name", callback_data="check_telegram")],
-        [InlineKeyboardButton("🔗 Facebook Link", callback_data="check_fb_link")],
+        [InlineKeyboardButton("📱 Имя пользователя Telegram", callback_data="check_telegram")],
+        [InlineKeyboardButton("🔗 Facebook Ссылка", callback_data="check_fb_link")],
         [InlineKeyboardButton("🆔 Telegram ID", callback_data="check_telegram_id")],
-        [InlineKeyboardButton("🔢 Phone", callback_data="check_phone")],
-        [InlineKeyboardButton("👤 Full Name", callback_data="check_fullname")],
+        [InlineKeyboardButton("🔢 Номер телефона", callback_data="check_phone")],
+        [InlineKeyboardButton("👤 Клиент", callback_data="check_fullname")],
         [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -625,7 +582,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             welcome_message,
             reply_markup=get_main_menu_keyboard()
         )
-        logger.info(f"Start command processed for user {update.effective_user.id}")
     except Exception as e:
         logger.error(f"Error in start_command: {e}", exc_info=True)
         try:
@@ -656,7 +612,6 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             welcome_message,
             reply_markup=get_main_menu_keyboard()
         )
-        logger.info(f"Quit command processed for user {user_id}")
         
         # Clean up messages AFTER showing menu (in background, don't wait)
         # This ensures fast response to user
@@ -682,8 +637,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     data = query.data
-    if DEBUG_MODE:
-        logger.info(f"DEBUG: button_callback received data: {data}")
     
     # Handle edit lead callback
     if data.startswith("edit_lead_"):
@@ -758,8 +711,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise
     
     elif data == "check_menu":
-        if DEBUG_MODE:
-            logger.info("DEBUG: Processing check_menu callback")
         await query.edit_message_text(
             "✅ Проверить клиента\n\nВыберите способ проверки:",
             reply_markup=get_check_menu_keyboard()
@@ -799,10 +750,9 @@ async def cleanup_check_messages(update: Update, context: ContextTypes.DEFAULT_T
         for msg_id in message_ids:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception as e:
+            except Exception:
                 # Message might be too old or already deleted, ignore
-                if DEBUG_MODE:
-                    logger.debug(f"Could not delete check message {msg_id}: {e}")
+                pass
         
         # Clear the list
         context.user_data['last_check_messages'] = []
@@ -827,10 +777,9 @@ async def cleanup_add_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 continue
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception as e:
+            except Exception:
                 # Message might be too old or already deleted, ignore
-                if DEBUG_MODE:
-                    logger.debug(f"Could not delete add message {msg_id}: {e}")
+                pass
         
         # Clear the list
         context.user_data['add_message_ids'] = []
@@ -879,13 +828,8 @@ async def cleanup_all_messages_before_main_menu(update: Update, context: Context
         try:
             # Use asyncio.gather with return_exceptions=True to not fail on individual errors
             results = await asyncio.gather(*delete_tasks, return_exceptions=True)
-            if DEBUG_MODE:
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        logger.debug(f"Could not delete message {message_ids_to_delete[i]}: {result}")
-        except Exception as e:
-            if DEBUG_MODE:
-                logger.debug(f"Error during parallel message deletion: {e}")
+        except Exception:
+            pass
 
 # Check callbacks
 async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -896,7 +840,7 @@ async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
     
-    await query.edit_message_text("📱 Введите Telegram Name для проверки:")
+    await query.edit_message_text("📱 Введите Имя пользователя Telegram для проверки:")
     return CHECK_BY_TELEGRAM
 
 async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -907,7 +851,7 @@ async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
     
-    await query.edit_message_text("🔗 Введите Facebook Link для проверки:")
+    await query.edit_message_text("🔗 Введите Facebook Ссылка для проверки:")
     return CHECK_BY_FB_LINK
 
 async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -929,7 +873,7 @@ async def check_fullname_callback(update: Update, context: ContextTypes.DEFAULT_
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
     
-    await query.edit_message_text("👤 Введите полное имя (или фамилию):")
+    await query.edit_message_text("👤 Введите имя клиента (или фамилию):")
     return CHECK_BY_FULLNAME
 
 # Add callback - new sequential flow
@@ -939,7 +883,6 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await query.answer()
         user_id = query.from_user.id
-        logger.info(f"Add flow started for user {user_id}")
         
         user_data_store[user_id] = {}
         user_data_store_access_time[user_id] = time.time()
@@ -960,7 +903,6 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Save message ID for cleanup
         if query.message:
             await save_add_message(update, context, query.message.message_id)
-        logger.info(f"Add flow message sent for user {user_id}, returning ADD_FULLNAME state")
         return ADD_FULLNAME
     except Exception as e:
         logger.error(f"Error in add_new_callback: {e}", exc_info=True)
@@ -978,11 +920,7 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Universal check function
 async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, field_name: str, field_label: str, current_state: int):
     """Universal function to check by any field"""
-    if DEBUG_MODE:
-        logger.info(f"DEBUG: check_by_field called with field_name={field_name}, field_label={field_label}")
     search_value = update.message.text.strip()
-    if DEBUG_MODE:
-        logger.info(f"DEBUG: search_value (after strip)={search_value}")
     
     if not search_value:
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
@@ -1013,8 +951,6 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             await save_check_message(update, context, sent_message.message_id)
             return current_state
         search_value = normalized
-        if DEBUG_MODE:
-            logger.info(f"DEBUG: Checking phone, normalized: {search_value}")
     
     # Normalize Facebook link if checking by facebook_link
     elif field_name == "facebook_link":
@@ -1030,8 +966,6 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             await save_check_message(update, context, sent_message.message_id)
             return current_state
         search_value = normalized
-        if DEBUG_MODE:
-            logger.info(f"DEBUG: Checking facebook_link, normalized: {search_value}")
     
     # Normalize Telegram Name if checking by telegram_user
     elif field_name == "telegram_user":
@@ -1041,8 +975,6 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
             return current_state
         search_value = normalized
-        if DEBUG_MODE:
-            logger.info(f"DEBUG: Checking telegram_user, normalized: {search_value}")
     
     # Get Supabase client (for all fields, not just phone)
     client = get_supabase_client()
@@ -1068,7 +1000,6 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             
             # Supabase REST использует * как wildcard, а не %
             pattern = f"*{last_digits}"
-            logger.info(f"PHONE SEARCH: normalized={search_value}, last_digits={last_digits}, pattern={pattern}")
             
             # Search by suffix using ilike (case-insensitive pattern matching)
             # Limit results to 50 for performance
@@ -1079,21 +1010,16 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
                 .limit(50)
                 .execute()
             )
-            logger.info(f"PHONE SEARCH: Supabase response data length={len(response.data) if response.data else 0}")
         else:
             # For other fields: exact match, limit to 50 results
-            if DEBUG_MODE:
-                logger.info(f"DEBUG: Searching {db_field_name} with value: {search_value}")
             response = client.table(TABLE_NAME).select("*").eq(db_field_name, search_value).limit(50).execute()
-            if DEBUG_MODE:
-                logger.info(f"DEBUG: Query executed, response data length: {len(response.data) if response.data else 0}")
         
         # Field labels mapping (Russian) - use database column names
         field_labels = {
-            'fullname': 'Имя',
-            'phone': 'Телефон',
-            'facebook_link': 'Facebook Link',
-            'telegram_user': 'Telegram Name',  # Changed from telegram_name to telegram_user
+            'fullname': 'Клиент',
+            'phone': 'Номер телефона',
+            'facebook_link': 'Facebook Ссылка',
+            'telegram_user': 'Имя пользователя Telegram',  # Changed from telegram_name to telegram_user
             'telegram_id': 'Telegram ID',
             'manager_name': 'Добавил',
             'created_at': 'Дата'
@@ -1101,8 +1027,6 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         
         if response.data and len(response.data) > 0:
             results = response.data
-            if DEBUG_MODE:
-                logger.info(f"DEBUG: Found {len(results)} result(s)")
             
             # If multiple results, show all
             if len(results) > 1:
@@ -1240,10 +1164,10 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Field labels mapping (Russian)
         field_labels = {
-            'fullname': 'Имя',
-            'phone': 'Телефон',
-            'facebook_link': 'Facebook Link',
-            'telegram_user': 'Telegram Name',  # Changed from telegram_name to telegram_user
+            'fullname': 'Клиент',
+            'phone': 'Номер телефона',
+            'facebook_link': 'Facebook Ссылка',
+            'telegram_user': 'Имя пользователя Telegram',  # Changed from telegram_name to telegram_user
             'telegram_id': 'Telegram ID',
             'manager_name': 'Добавил',
             'created_at': 'Дата'
@@ -1251,8 +1175,6 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if response.data and len(response.data) > 0:
             results = response.data
-            if DEBUG_MODE:
-                logger.info(f"DEBUG: Found {len(results)} result(s) for fullname search: {search_value}")
             
             # Check if more than 10 results
             if len(results) > 10:
@@ -1346,19 +1268,15 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message = "❌ <b>Клиент не найден</b>."
             reply_markup = get_main_menu_keyboard()
         
-        await update.message.reply_text(
+            await update.message.reply_text(
             message,
             reply_markup=reply_markup,
             parse_mode='HTML'
-        )
+            )
         
     except Exception as e:
         logger.error(f"Error checking by fullname: {e}", exc_info=True)
-        error_msg = "❌ Произошла ошибка при проверке."
-        if DEBUG_MODE:
-            error_msg += f"\n\nДетали: {str(e)}"
-        else:
-            error_msg += " Попробуйте позже или обратитесь к администратору."
+        error_msg = "❌ Произошла ошибка при проверке. Попробуйте позже или обратитесь к администратору."
         await update.message.reply_text(
             error_msg,
             reply_markup=get_main_menu_keyboard()
@@ -1368,10 +1286,10 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Check input handlers
 async def check_telegram_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await check_by_field(update, context, "telegram_user", "Telegram Name", CHECK_BY_TELEGRAM)
+    return await check_by_field(update, context, "telegram_user", "Имя пользователя Telegram", CHECK_BY_TELEGRAM)
 
 async def check_fb_link_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await check_by_field(update, context, "facebook_link", "Facebook Link", CHECK_BY_FB_LINK)
+    return await check_by_field(update, context, "facebook_link", "Facebook Ссылка", CHECK_BY_FB_LINK)
 
 async def check_telegram_id_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for check by telegram ID conversation"""
@@ -1424,8 +1342,6 @@ def cleanup_user_data_store():
             if user_id in user_data_store_access_time:
                 del user_data_store_access_time[user_id]
     
-    if users_to_remove and DEBUG_MODE:
-        logger.info(f"Cleaned up {len(users_to_remove)} old user_data_store entries")
 
 async def check_duplicate_realtime(client, field_name: str, field_value: str) -> tuple[bool, str]:
     """Check if a field value already exists in the database (for real-time validation)"""
@@ -1648,9 +1564,9 @@ async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     field_labels = {
         'fullname': 'Имя Фамилия',
         'manager_name': 'Агент',
-        'phone': 'Телефон',
-        'facebook_link': 'Facebook Link',
-        'telegram_name': 'Telegram Name',
+        'phone': 'Номер телефона',
+        'facebook_link': 'Facebook Ссылка',
+        'telegram_name': 'Имя пользователя Telegram',
         'telegram_id': 'Telegram ID'
     }
     
@@ -1689,9 +1605,9 @@ async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Field labels for uniqueness check messages (Russian)
 UNIQUENESS_FIELD_LABELS = {
     'phone': 'Номер телефона',
-    'fullname': 'Имя',
-    'facebook_link': 'Facebook Link',
-    'telegram_name': 'Telegram Name',
+    'fullname': 'Клиент',
+    'facebook_link': 'Facebook Ссылка',
+    'telegram_name': 'Имя пользователя Telegram',
     'telegram_id': 'Telegram ID'
 }
 
@@ -1920,9 +1836,9 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_identifier:
         await query.edit_message_text(
             "❌ <b>Ошибка:</b> Необходимо указать минимум одно из полей:\n\n"
-            "• Phone\n"
-            "• Facebook Link\n"
-            "• Telegram Name\n"
+            "• Номер телефона\n"
+            "• Facebook Ссылка\n"
+            "• Имя пользователя Telegram\n"
             "• Telegram ID\n\n"
             "ℹ️ Начнем с первого опционального поля:",
             reply_markup=get_main_menu_keyboard(),
@@ -2012,9 +1928,9 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             field_labels = {
                 'fullname': 'Имя Фамилия',
                 'manager_name': 'Агент',
-                'phone': 'Телефон',
-                'facebook_link': 'Facebook Link',
-                'telegram_name': 'Telegram Name',
+                'phone': 'Номер телефона',
+                'facebook_link': 'Facebook Ссылка',
+                'telegram_name': 'Имя пользователя Telegram',
                 'telegram_id': 'Telegram ID'
             }
             
@@ -2057,8 +1973,6 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 else:
                     raise
-            
-            logger.info(f"Added new client: {save_data}")
         else:
             # Get review screen message ID to exclude from cleanup
             review_message_id = None
@@ -2229,9 +2143,9 @@ def get_edit_field_keyboard(user_id: int):
     telegram_name_status = "🟢" if (telegram_name_value and telegram_name_value.strip()) else "⚪"
     telegram_id_status = "🟢" if has_value('telegram_id') else "⚪"
     
-    keyboard.append([InlineKeyboardButton(f"{phone_status} Phone", callback_data="edit_field_phone")])
-    keyboard.append([InlineKeyboardButton(f"{fb_link_status} Facebook Link", callback_data="edit_field_fb_link")])
-    keyboard.append([InlineKeyboardButton(f"{telegram_name_status} Telegram Name", callback_data="edit_field_telegram_name")])
+    keyboard.append([InlineKeyboardButton(f"{phone_status} Номер телефона", callback_data="edit_field_phone")])
+    keyboard.append([InlineKeyboardButton(f"{fb_link_status} Facebook Ссылка", callback_data="edit_field_fb_link")])
+    keyboard.append([InlineKeyboardButton(f"{telegram_name_status} Имя пользователя Telegram", callback_data="edit_field_telegram_name")])
     keyboard.append([InlineKeyboardButton(f"{telegram_id_status} Telegram ID", callback_data="edit_field_telegram_id")])
     
     # Action buttons
@@ -2390,7 +2304,7 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not has_identifier:
         await query.edit_message_text(
             "❌ Ошибка: Необходимо указать минимум одно из полей:\n"
-            "Phone, Facebook Link, Telegram Name или Telegram ID!\n\n"
+            "Номер телефона, Facebook Ссылка, Имя пользователя Telegram или Telegram ID!\n\n"
             "Выберите поле для редактирования:",
             reply_markup=get_edit_field_keyboard(user_id)
         )
@@ -2403,8 +2317,8 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "❌ Ошибка: Не удалось подключиться к базе данных.",
             reply_markup=get_main_menu_keyboard()
         )
-        if user_id in user_data_store:
-            del user_data_store[user_id]
+    if user_id in user_data_store:
+        del user_data_store[user_id]
         if user_id in user_data_store_access_time:
             del user_data_store_access_time[user_id]
         return ConversationHandler.END
@@ -2449,7 +2363,6 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 reply_markup=get_main_menu_keyboard(),
                 parse_mode='HTML'
             )
-            logger.info(f"Updated lead {lead_id}: {clean_update_data}")
         else:
             await query.edit_message_text(
                 "❌ Ошибка: Данные не были обновлены. Попробуйте снова.",
@@ -2458,11 +2371,7 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     except Exception as e:
         logger.error(f"Error updating lead: {e}", exc_info=True)
-        error_msg = "❌ Произошла ошибка при обновлении данных."
-        if DEBUG_MODE:
-            error_msg += f"\n\nДетали: {str(e)}"
-        else:
-            error_msg += " Попробуйте позже или обратитесь к администратору."
+        error_msg = "❌ Произошла ошибка при обновлении данных. Попробуйте позже или обратитесь к администратору."
         await query.edit_message_text(
             error_msg,
             reply_markup=get_main_menu_keyboard()
@@ -2499,16 +2408,16 @@ async def edit_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Edit field callbacks
 async def edit_field_fullname_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await edit_field_callback(update, context, 'fullname', 'Full Name', EDIT_FULLNAME)
+    return await edit_field_callback(update, context, 'fullname', 'Клиент', EDIT_FULLNAME)
 
 async def edit_field_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await edit_field_callback(update, context, 'phone', 'Phone', EDIT_PHONE)
+    return await edit_field_callback(update, context, 'phone', 'Номер телефона', EDIT_PHONE)
 
 async def edit_field_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await edit_field_callback(update, context, 'facebook_link', 'Facebook Link', EDIT_FB_LINK)
+    return await edit_field_callback(update, context, 'facebook_link', 'Facebook Ссылка', EDIT_FB_LINK)
 
 async def edit_field_telegram_name_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await edit_field_callback(update, context, 'telegram_name', 'Telegram Name', EDIT_TELEGRAM_NAME)
+    return await edit_field_callback(update, context, 'telegram_name', 'Имя пользователя Telegram', EDIT_TELEGRAM_NAME)
 
 async def edit_field_telegram_id_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_callback(update, context, 'telegram_id', 'Telegram ID', EDIT_TELEGRAM_ID)
@@ -2558,7 +2467,6 @@ def cleanup_on_shutdown():
     global shutdown_requested, telegram_app, telegram_event_loop, supabase
     
     shutdown_requested = True
-    logger.info("Shutdown requested, cleaning up resources...")
     
     try:
         # Stop Telegram app
@@ -2573,26 +2481,21 @@ def cleanup_on_shutdown():
                     telegram_app.shutdown(),
                     telegram_event_loop
                 )
-            logger.info("Telegram app stopped")
     except Exception as e:
         logger.error(f"Error stopping Telegram app: {e}", exc_info=True)
     
     # Clear cache
     uniqueness_cache.clear()
-    logger.info("Cache cleared")
     
-    logger.info("Shutdown complete")
 
 def setup_signal_handlers():
     """Setup signal handlers for graceful shutdown"""
     def signal_handler(signum, frame):
-        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
         cleanup_on_shutdown()
         sys.exit(0)
     
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
-    logger.info("Signal handlers registered")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -2600,7 +2503,6 @@ def webhook():
     try:
         json_data = request.get_json()
         if json_data:
-            logger.info(f"Received webhook update: {json_data.get('update_id', 'unknown')}")
             
             # Check if telegram_app is initialized
             if telegram_app is None:
@@ -2625,8 +2527,6 @@ def webhook():
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(telegram_app.process_update(update))
                 loop.close()
-            
-            logger.info(f"Update queued for processing: {update.update_id}")
         else:
             logger.warning("Received empty webhook request")
         return "OK", 200
@@ -2639,7 +2539,6 @@ async def setup_webhook():
     try:
         webhook_url = f"{WEBHOOK_URL}/webhook"
         await telegram_app.bot.set_webhook(url=webhook_url)
-        logger.info(f"Webhook set to: {webhook_url}")
     except Exception as e:
         logger.error(f"Error setting webhook: {e}")
 
@@ -2651,7 +2550,6 @@ def initialize_telegram_app():
     """Initialize Telegram app - called on module import (needed for gunicorn)"""
     global telegram_app, telegram_event_loop
     
-    logger.info("Starting Telegram app initialization...")
     
     # Validate environment variables first
     if not TELEGRAM_BOT_TOKEN:
@@ -2662,12 +2560,10 @@ def initialize_telegram_app():
         logger.error("WEBHOOK_URL not found - Telegram app will not be initialized")
         return
     
-    logger.info("Environment variables validated, creating Telegram app...")
     
     try:
         # Create Telegram app
         create_telegram_app()
-        logger.info("Telegram app created successfully")
     except Exception as e:
         logger.error(f"Failed to create Telegram app: {e}", exc_info=True)
         return
@@ -2680,21 +2576,16 @@ def initialize_telegram_app():
         """Run async webhook setup and start update processing in a separate thread"""
         global telegram_event_loop
         try:
-            logger.info("Starting Telegram setup in background thread...")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             telegram_event_loop = loop  # Save reference for webhook
-            logger.info("Event loop created, initializing Telegram app...")
             
             loop.run_until_complete(telegram_app.initialize())
-            logger.info("Telegram app initialized, setting up webhook...")
             
             loop.run_until_complete(setup_webhook())
-            logger.info("Webhook set up successfully, starting update processing...")
             
             # Start processing updates
             loop.run_until_complete(telegram_app.start())
-            logger.info("Telegram app started successfully, entering event loop...")
             
             # Keep the loop running to process updates
             loop.run_forever()
@@ -2706,7 +2597,6 @@ def initialize_telegram_app():
     setup_thread.daemon = True
     setup_thread.start()
     
-    logger.info("Telegram app initialization started in background thread")
 
 def create_telegram_app():
     """Create and configure Telegram application"""
@@ -2814,7 +2704,7 @@ def create_telegram_app():
     
     # Add callback query handler for menu navigation buttons and edit lead
     # Registered AFTER ConversationHandlers so they have priority
-    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu|add_menu|edit_lead_)$"))
+    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu|add_menu|edit_lead_\\d+)$"))
     
     # Edit conversation handler
     edit_conv = ConversationHandler(
@@ -2852,7 +2742,6 @@ def create_telegram_app():
     
     telegram_app.add_handler(edit_conv)
     
-    logger.info("Telegram application initialized")
     return telegram_app
 
 # Setup signal handlers for graceful shutdown
@@ -2887,7 +2776,6 @@ if __name__ == '__main__':
         exit(1)
     
     # Note: Supabase client will be initialized lazily on first use
-    logger.info("Supabase client will be initialized on first use")
     
     # Telegram app is already initialized by initialize_telegram_app() above
     # Give it a moment to initialize
@@ -2896,6 +2784,5 @@ if __name__ == '__main__':
     
     # For production, gunicorn will be used (see Procfile)
     # This code is kept for local development
-    logger.info(f"Starting Flask development server on port {PORT}")
     logger.warning("For production, use: gunicorn -w 1 -b 0.0.0.0:$PORT main:app")
     app.run(host='0.0.0.0', port=PORT, debug=False)
