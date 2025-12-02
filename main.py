@@ -259,9 +259,11 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
     - https://www.facebook.com/profile.php?id=123456 → 123456 (only ID)
     - https://www.facebook.com/profile.php?id=123456&ref=... → 123456 (only ID)
     - https://www.facebook.com/markl1n → markl1n
+    - www.facebook.com/markl1n → markl1n
+    - facebook.com/markl1n → markl1n
     - https://www.facebook.com/profile/username → username
     - https://m.facebook.com/username → username
-    - facebook.com/username → username
+    - m.facebook.com/username → username
     """
     if not link:
         return False, "Facebook ссылка не может быть пустой", ""
@@ -272,10 +274,12 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
     if link_clean.startswith('@'):
         link_clean = link_clean[1:]
     
-    # Check if it's a valid Facebook URL
+    # Check if it's a valid Facebook URL - support more formats
+    # Accept: https://www.facebook.com/..., http://www.facebook.com/..., 
+    # www.facebook.com/..., facebook.com/..., m.facebook.com/...
     facebook_patterns = [
         r'https?://(www\.)?(m\.)?facebook\.com/',
-        r'^facebook\.com/',
+        r'^(www\.)?facebook\.com/',
         r'^m\.facebook\.com/'
     ]
     
@@ -285,8 +289,25 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
             is_facebook_url = True
             break
     
-    if not is_facebook_url and not link_clean.startswith('facebook.com/') and not link_clean.startswith('m.facebook.com/'):
-        return False, "Неверный формат Facebook ссылки. Пример: https://www.facebook.com/username", ""
+    # Also check for formats without protocol explicitly
+    if not is_facebook_url:
+        link_lower = link_clean.lower()
+        if (link_lower.startswith('www.facebook.com/') or 
+            link_lower.startswith('facebook.com/') or 
+            link_lower.startswith('m.facebook.com/')):
+            is_facebook_url = True
+    
+    if not is_facebook_url:
+        error_msg = (
+            "❌ Неверный формат Facebook ссылки.\n\n"
+            "📋 Примеры допустимых вариантов:\n"
+            "• <code>https://www.facebook.com/username</code>\n"
+            "• <code>www.facebook.com/username</code>\n"
+            "• <code>facebook.com/username</code>\n"
+            "• <code>https://m.facebook.com/profile.php?id=123456789012345</code>\n\n"
+            "💡 Можно вставлять ссылку целиком, бот сам извлечёт username или ID."
+        )
+        return False, error_msg, ""
     
     # Remove http:// or https:// if present
     if link_clean.startswith('http://'):
@@ -391,7 +412,16 @@ def validate_facebook_link(link: str) -> tuple[bool, str, str]:
     
     if DEBUG_MODE:
         logger.warning(f"DEBUG: Failed to extract Facebook username/ID from link: {link_clean}")
-    return False, "Неверный формат Facebook ссылки", ""
+    error_msg = (
+        "❌ Неверный формат Facebook ссылки.\n\n"
+        "📋 Примеры допустимых вариантов:\n"
+        "• <code>https://www.facebook.com/username</code>\n"
+        "• <code>www.facebook.com/username</code>\n"
+        "• <code>facebook.com/username</code>\n"
+        "• <code>https://m.facebook.com/profile.php?id=123456789012345</code>\n\n"
+        "💡 Можно вставлять ссылку целиком, бот сам извлечёт username или ID."
+    )
+    return False, error_msg, ""
 
 def validate_telegram_name(tg_name: str) -> tuple[bool, str, str]:
     """Validate Telegram name: remove @ if present, remove all spaces, check not empty"""
@@ -659,7 +689,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_main_menu_keyboard()
             )
             return
-    
+        
     if data == "main_menu":
         await query.edit_message_text(
             "👋 Главное меню\n\nВыберите действие:",
@@ -680,11 +710,65 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_add_menu_keyboard()
         )
 
+# Message cleanup functions
+async def cleanup_check_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clean up old check messages when starting a new check"""
+    if 'last_check_messages' in context.user_data and context.user_data['last_check_messages']:
+        chat_id = update.effective_chat.id
+        bot = context.bot
+        message_ids = context.user_data['last_check_messages']
+        
+        for msg_id in message_ids:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                # Message might be too old or already deleted, ignore
+                if DEBUG_MODE:
+                    logger.debug(f"Could not delete check message {msg_id}: {e}")
+        
+        # Clear the list
+        context.user_data['last_check_messages'] = []
+
+async def save_check_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id: int):
+    """Save message ID for later cleanup"""
+    if 'last_check_messages' not in context.user_data:
+        context.user_data['last_check_messages'] = []
+    context.user_data['last_check_messages'].append(message_id)
+
+async def cleanup_add_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clean up all add flow messages except the final success message"""
+    user_id = update.effective_user.id
+    if 'add_message_ids' in context.user_data and context.user_data['add_message_ids']:
+        chat_id = update.effective_chat.id
+        bot = context.bot
+        message_ids = context.user_data['add_message_ids']
+        
+        for msg_id in message_ids:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                # Message might be too old or already deleted, ignore
+                if DEBUG_MODE:
+                    logger.debug(f"Could not delete add message {msg_id}: {e}")
+        
+        # Clear the list
+        context.user_data['add_message_ids'] = []
+
+async def save_add_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id: int):
+    """Save message ID for later cleanup after successful add"""
+    if 'add_message_ids' not in context.user_data:
+        context.user_data['add_message_ids'] = []
+    context.user_data['add_message_ids'].append(message_id)
+
 # Check callbacks
 async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for check by telegram conversation"""
     query = update.callback_query
     await query.answer()
+    
+    # Clean up old check messages if any
+    await cleanup_check_messages(update, context)
+    
     await query.edit_message_text("📱 Введите Telegram Name для проверки:")
     return CHECK_BY_TELEGRAM
 
@@ -692,6 +776,10 @@ async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_T
     """Entry point for check by facebook link conversation"""
     query = update.callback_query
     await query.answer()
+    
+    # Clean up old check messages if any
+    await cleanup_check_messages(update, context)
+    
     await query.edit_message_text("🔗 Введите Facebook Link для проверки:")
     return CHECK_BY_FB_LINK
 
@@ -699,6 +787,10 @@ async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     """Entry point for check by phone conversation"""
     query = update.callback_query
     await query.answer()
+    
+    # Clean up old check messages if any
+    await cleanup_check_messages(update, context)
+    
     await query.edit_message_text("🔢 Введите номер телефона для проверки:")
     return CHECK_BY_PHONE
 
@@ -706,6 +798,10 @@ async def check_fullname_callback(update: Update, context: ContextTypes.DEFAULT_
     """Entry point for check by fullname conversation"""
     query = update.callback_query
     await query.answer()
+    
+    # Clean up old check messages if any
+    await cleanup_check_messages(update, context)
+    
     await query.edit_message_text("👤 Введите полное имя (или фамилию):")
     return CHECK_BY_FULLNAME
 
@@ -731,6 +827,9 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_navigation_keyboard(is_optional=False, show_back=False),
         parse_mode='HTML'
     )
+    # Save message ID for cleanup
+    if query.message:
+        await save_add_message(update, context, query.message.message_id)
     return ADD_FULLNAME
 
 # Universal check function
@@ -743,7 +842,12 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         logger.info(f"DEBUG: search_value (after strip)={search_value}")
     
     if not search_value:
-        await update.message.reply_text(f"❌ {field_label} не может быть пустым. Попробуйте снова:")
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
+        sent_message = await update.message.reply_text(
+            f"❌ {field_label} не может быть пустым. Попробуйте снова:",
+            reply_markup=keyboard
+        )
+        await save_check_message(update, context, sent_message.message_id)
         return current_state
     
     # Map internal field names to database column names
@@ -758,7 +862,12 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
     if field_name == "phone":
         normalized = normalize_phone(search_value)
         if len(normalized) < 7:
-            await update.message.reply_text("❌ Для поиска по телефону необходимо минимум 7 цифр. Попробуйте снова:")
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
+            sent_message = await update.message.reply_text(
+                "❌ Для поиска по телефону необходимо минимум 7 цифр. Попробуйте снова:",
+                reply_markup=keyboard
+            )
+            await save_check_message(update, context, sent_message.message_id)
             return current_state
         search_value = normalized
         if DEBUG_MODE:
@@ -769,7 +878,13 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         # Use validate_facebook_link to normalize the link (same logic as when adding)
         is_valid, error_msg, normalized = validate_facebook_link(search_value)
         if not is_valid:
-            await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
+            sent_message = await update.message.reply_text(
+                f"❌ {error_msg}\n\nПопробуйте снова:",
+                reply_markup=keyboard,
+                parse_mode='HTML'
+            )
+            await save_check_message(update, context, sent_message.message_id)
             return current_state
         search_value = normalized
         if DEBUG_MODE:
@@ -787,11 +902,11 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             logger.info(f"DEBUG: Checking telegram_user, normalized: {search_value}")
     
     # Get Supabase client (for all fields, not just phone)
-    client = get_supabase_client()
-    if not client:
-        error_msg = get_user_friendly_error(Exception("Database connection failed"), "подключении к базе данных")
-        await update.message.reply_text(
-            error_msg,
+        client = get_supabase_client()
+        if not client:
+            error_msg = get_user_friendly_error(Exception("Database connection failed"), "подключении к базе данных")
+            await update.message.reply_text(
+                error_msg,
             reply_markup=get_main_menu_keyboard(),
             parse_mode='HTML'
         )
@@ -887,7 +1002,7 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
                     # Skip if None, empty string, or 'Не указано'
                     if value is None or value == '' or value == 'Не указано':
                         continue
-            
+                    
                     # Format date field
                     if field_name_key == 'created_at':
                         try:
@@ -930,20 +1045,23 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             message = "❌ <b>Клиент не найден</b>."
             reply_markup = get_main_menu_keyboard()
         
-        await update.message.reply_text(
+        sent_message = await update.message.reply_text(
             message,
             reply_markup=reply_markup,
             parse_mode='HTML'
         )
+        # Save message ID for cleanup
+        await save_check_message(update, context, sent_message.message_id)
         
     except Exception as e:
         logger.error(f"Error checking by {field_name}: {e}", exc_info=True)
         error_msg = get_user_friendly_error(e, "проверке")
-        await update.message.reply_text(
+        sent_message = await update.message.reply_text(
             error_msg,
             reply_markup=get_main_menu_keyboard(),
             parse_mode='HTML'
         )
+        await save_check_message(update, context, sent_message.message_id)
     
     return ConversationHandler.END
 
@@ -964,12 +1082,12 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = get_supabase_client()
     if not client:
         error_msg = get_user_friendly_error(Exception("Database connection failed"), "подключении к базе данных")
-        await update.message.reply_text(
-            error_msg,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode='HTML'
-        )
-        return ConversationHandler.END
+    await update.message.reply_text(
+        error_msg,
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode='HTML'
+    )
+    return ConversationHandler.END
     
     try:
         # Search using ilike with contains pattern (case-insensitive)
@@ -1116,6 +1234,10 @@ async def check_telegram_id_callback(update: Update, context: ContextTypes.DEFAU
     """Entry point for check by telegram ID conversation"""
     query = update.callback_query
     await query.answer()
+    
+    # Clean up old check messages if any
+    await cleanup_check_messages(update, context)
+    
     await query.edit_message_text("🆔 Введите Telegram ID для проверки:")
     return CHECK_BY_TELEGRAM_ID
 
@@ -1216,11 +1338,12 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             field_label = get_field_label('phone')
             requirements = get_field_format_requirements('phone')
-            await update.message.reply_text(
+            sent_message = await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
                 reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
                 parse_mode='HTML'
             )
+            await save_add_message(update, context, sent_message.message_id)
             return current_state
     
     elif field_name == 'facebook_link':
@@ -1231,11 +1354,12 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             field_label = get_field_label('facebook_link')
             requirements = get_field_format_requirements('facebook_link')
-            await update.message.reply_text(
+            sent_message = await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
                 reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
                 parse_mode='HTML'
             )
+            await save_add_message(update, context, sent_message.message_id)
             return current_state
     
     elif field_name == 'telegram_name':
@@ -1246,11 +1370,12 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             field_label = get_field_label('telegram_name')
             requirements = get_field_format_requirements('telegram_name')
-            await update.message.reply_text(
+            sent_message = await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
                 reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
                 parse_mode='HTML'
             )
+            await save_add_message(update, context, sent_message.message_id)
             return current_state
     
     elif field_name == 'telegram_id':
@@ -1261,11 +1386,12 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             field_label = get_field_label('telegram_id')
             requirements = get_field_format_requirements('telegram_id')
-            await update.message.reply_text(
+            sent_message = await update.message.reply_text(
                 f"❌ {error_msg}\n\n📝 Введите {field_label}:\n\n{requirements}",
                 reply_markup=get_navigation_keyboard(is_optional=True, show_back=True),
                 parse_mode='HTML'
             )
+            await save_add_message(update, context, sent_message.message_id)
             return current_state
     
     else:
@@ -1291,11 +1417,12 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message = f"❌ Поле не может быть пустым.\n\n📝 Введите {field_label}:\n\n{requirements}"
                 use_html = True
             
-            await update.message.reply_text(
+            sent_message = await update.message.reply_text(
                 message,
                 reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=(field_name != 'fullname')),
                 parse_mode='HTML' if use_html else None
             )
+            await save_add_message(update, context, sent_message.message_id)
             return current_state
     
     # Real-time duplicate check for critical fields
@@ -1356,12 +1483,16 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True),
                 parse_mode='HTML'
             )
+            # Save message ID for cleanup (edit_message_text doesn't return new message, use existing)
+            if update.callback_query.message:
+                await save_add_message(update, context, update.callback_query.message.message_id)
         elif update.message:
-            await update.message.reply_text(
+            sent_message = await update.message.reply_text(
                 message,
                 reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True),
                 parse_mode='HTML'
             )
+            await save_add_message(update, context, sent_message.message_id)
         return next_state
 
 async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1401,12 +1532,16 @@ async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
         )
+        # Save message ID for cleanup
+        if update.callback_query.message:
+            await save_add_message(update, context, update.callback_query.message.message_id)
     elif update.message:
-        await update.message.reply_text(
+        sent_message = await update.message.reply_text(
             message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
         )
+        await save_add_message(update, context, sent_message.message_id)
 
 # Field labels for uniqueness check messages (Russian)
 UNIQUENESS_FIELD_LABELS = {
@@ -1532,6 +1667,9 @@ async def add_skip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=True),
             parse_mode='HTML'
         )
+        # Save message ID for cleanup
+        if query.message:
+            await save_add_message(update, context, query.message.message_id)
         return next_state
 
 async def add_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1584,6 +1722,9 @@ async def add_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_navigation_keyboard(is_optional=is_optional, show_back=(prev_field != 'fullname')),
             parse_mode='HTML'
         )
+        # Save message ID for cleanup
+        if query.message:
+            await save_add_message(update, context, query.message.message_id)
         return prev_state
     else:
         # Already at first field, go to main menu
@@ -1732,6 +1873,9 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             logger.info(f"Added new client: {save_data}")
+            
+            # Clean up all add flow messages except the final success message
+            await cleanup_add_messages(update, context)
         else:
             await query.edit_message_text(
                 "❌ <b>Ошибка:</b> Данные не были сохранены.\n\n"
@@ -2013,8 +2157,8 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "❌ Ошибка: Не удалось подключиться к базе данных.",
             reply_markup=get_main_menu_keyboard()
         )
-        if user_id in user_data_store:
-            del user_data_store[user_id]
+    if user_id in user_data_store:
+        del user_data_store[user_id]
         if user_id in user_data_store_access_time:
             del user_data_store_access_time[user_id]
         return ConversationHandler.END
