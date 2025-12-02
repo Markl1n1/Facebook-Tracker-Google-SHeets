@@ -842,7 +842,13 @@ async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
     
-    await query.edit_message_text("📱 Введите Имя пользователя Telegram для проверки:")
+    try:
+        await query.edit_message_text("📱 Введите Имя пользователя Telegram для проверки:")
+    except Exception as e:
+        # If message can't be edited (e.g., already deleted), send new message
+        logger.warning(f"Could not edit message in check_telegram_callback: {e}")
+        await query.message.reply_text("📱 Введите Имя пользователя Telegram для проверки:")
+    
     return CHECK_BY_TELEGRAM
 
 async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -853,7 +859,13 @@ async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
     
-    await query.edit_message_text("🔗 Введите Facebook Ссылка для проверки:")
+    try:
+        await query.edit_message_text("🔗 Введите Facebook Ссылка для проверки:")
+    except Exception as e:
+        # If message can't be edited (e.g., already deleted), send new message
+        logger.warning(f"Could not edit message in check_fb_link_callback: {e}")
+        await query.message.reply_text("🔗 Введите Facebook Ссылка для проверки:")
+    
     return CHECK_BY_FB_LINK
 
 async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -864,7 +876,13 @@ async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
     
-    await query.edit_message_text("🔢 Введите номер телефона для проверки:")
+    try:
+        await query.edit_message_text("🔢 Введите номер телефона для проверки:")
+    except Exception as e:
+        # If message can't be edited (e.g., already deleted), send new message
+        logger.warning(f"Could not edit message in check_phone_callback: {e}")
+        await query.message.reply_text("🔢 Введите номер телефона для проверки:")
+    
     return CHECK_BY_PHONE
 
 async def check_fullname_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -875,7 +893,13 @@ async def check_fullname_callback(update: Update, context: ContextTypes.DEFAULT_
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
     
-    await query.edit_message_text("👤 Введите имя клиента (или фамилию):")
+    try:
+        await query.edit_message_text("👤 Введите имя клиента (или фамилию):")
+    except Exception as e:
+        # If message can't be edited (e.g., already deleted), send new message
+        logger.warning(f"Could not edit message in check_fullname_callback: {e}")
+        await query.message.reply_text("👤 Введите имя клиента (или фамилию):")
+    
     return CHECK_BY_FULLNAME
 
 # Add callback - new sequential flow
@@ -927,11 +951,11 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
     if not search_value:
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
         sent_message = await update.message.reply_text(
-            f"❌ {field_label} не может быть пустым. Попробуйте снова:",
+            f"❌ {field_label} не может быть пустым.",
             reply_markup=keyboard
         )
         await save_check_message(update, context, sent_message.message_id)
-        return current_state
+        return ConversationHandler.END
     
     # Map internal field names to database column names
     FIELD_NAME_MAPPING = {
@@ -947,11 +971,11 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         if len(normalized) < 7:
             keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
             sent_message = await update.message.reply_text(
-                "❌ Для поиска по телефону необходимо минимум 7 цифр. Попробуйте снова:",
+                "❌ Для поиска по телефону необходимо минимум 7 цифр.",
                 reply_markup=keyboard
             )
             await save_check_message(update, context, sent_message.message_id)
-            return current_state
+            return ConversationHandler.END
         search_value = normalized
     
     # Normalize Facebook link if checking by facebook_link
@@ -961,12 +985,12 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         if not is_valid:
             keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
             sent_message = await update.message.reply_text(
-                f"❌ {error_msg}\n\nПопробуйте снова:",
+                f"❌ {error_msg}",
                 reply_markup=keyboard,
                 parse_mode='HTML'
             )
             await save_check_message(update, context, sent_message.message_id)
-            return current_state
+            return ConversationHandler.END
         search_value = normalized
     
     # Normalize Telegram Name if checking by telegram_user
@@ -974,8 +998,13 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         # Use same normalization as when adding (remove @, spaces)
         is_valid, error_msg, normalized = validate_telegram_name(search_value)
         if not is_valid:
-            await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте снова:")
-            return current_state
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
+            sent_message = await update.message.reply_text(
+                f"❌ {error_msg}",
+                reply_markup=keyboard
+            )
+            await save_check_message(update, context, sent_message.message_id)
+            return ConversationHandler.END
         search_value = normalized
     
     # Get Supabase client (for all fields, not just phone)
@@ -1301,7 +1330,13 @@ async def check_telegram_id_callback(update: Update, context: ContextTypes.DEFAU
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
     
-    await query.edit_message_text("🆔 Введите Telegram ID для проверки:")
+    try:
+        await query.edit_message_text("🆔 Введите Telegram ID для проверки:")
+    except Exception as e:
+        # If message can't be edited (e.g., already deleted), send new message
+        logger.warning(f"Could not edit message in check_telegram_id_callback: {e}")
+        await query.message.reply_text("🆔 Введите Telegram ID для проверки:")
+    
     return CHECK_BY_TELEGRAM_ID
 
 async def check_telegram_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
