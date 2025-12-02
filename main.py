@@ -647,19 +647,22 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in user_data_store:
             del user_data_store[user_id]
         
-        # Clean up all intermediate messages before showing main menu
-        await cleanup_all_messages_before_main_menu(update, context)
-        
-        # Show main menu
+        # Show main menu FIRST (fast response)
         welcome_message = (
             "👋 Главное меню\n\n"
             "Выберите действие:"
         )
-        await update.message.reply_text(
+        sent_message = await update.message.reply_text(
             welcome_message,
             reply_markup=get_main_menu_keyboard()
         )
         logger.info(f"Quit command processed for user {user_id}")
+        
+        # Clean up messages AFTER showing menu (in background, don't wait)
+        # This ensures fast response to user
+        # Use application.create_task to ensure it runs in the correct event loop
+        context.application.create_task(cleanup_all_messages_before_main_menu(update, context))
+        
         return ConversationHandler.END
     except Exception as e:
         logger.error(f"Error in quit_command: {e}", exc_info=True)
@@ -697,13 +700,32 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
     if data == "main_menu":
-        # Clean up all intermediate messages before showing main menu
-        await cleanup_all_messages_before_main_menu(update, context)
+        # Get current message ID to exclude from cleanup
+        current_message_id = query.message.message_id if query.message else None
         
-        await query.edit_message_text(
-            "👋 Главное меню\n\nВыберите действие:",
-            reply_markup=get_main_menu_keyboard()
-        )
+        try:
+            # Show main menu FIRST (fast response)
+            await query.edit_message_text(
+                "👋 Главное меню\n\nВыберите действие:",
+                reply_markup=get_main_menu_keyboard()
+            )
+            
+            # Clean up messages AFTER showing menu (in background, don't wait)
+            # This ensures fast response to user
+            # Use application.create_task to ensure it runs in the correct event loop
+            context.application.create_task(cleanup_all_messages_before_main_menu(update, context, exclude_message_id=current_message_id))
+        except Exception as e:
+            # If edit fails (message was deleted), send new message
+            if "not found" in str(e) or "BadRequest" in str(type(e).__name__):
+                await query.message.reply_text(
+                    "👋 Главное меню\n\nВыберите действие:",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                # Clean up in background
+                context.application.create_task(cleanup_all_messages_before_main_menu(update, context, exclude_message_id=current_message_id))
+            else:
+                logger.error(f"Error in main_menu callback: {e}", exc_info=True)
+                raise
     
     elif data == "check_menu":
         if DEBUG_MODE:
@@ -772,32 +794,49 @@ async def save_add_message(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         context.user_data['add_message_ids'] = []
     context.user_data['add_message_ids'].append(message_id)
 
-async def cleanup_all_messages_before_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cleanup_all_messages_before_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, exclude_message_id: int = None):
     """Clean up all intermediate bot messages before showing main menu"""
     chat_id = update.effective_chat.id
     bot = context.bot
     
+    # Collect all message IDs to delete
+    message_ids_to_delete = []
+    
     # Clean up add flow messages
     if 'add_message_ids' in context.user_data and context.user_data['add_message_ids']:
-        message_ids = context.user_data['add_message_ids'].copy()
-        for msg_id in message_ids:
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception as e:
-                if DEBUG_MODE:
-                    logger.debug(f"Could not delete add message {msg_id}: {e}")
+        message_ids_to_delete.extend(context.user_data['add_message_ids'])
         context.user_data['add_message_ids'] = []
     
     # Clean up check flow messages
     if 'last_check_messages' in context.user_data and context.user_data['last_check_messages']:
-        message_ids = context.user_data['last_check_messages'].copy()
-        for msg_id in message_ids:
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception as e:
-                if DEBUG_MODE:
-                    logger.debug(f"Could not delete check message {msg_id}: {e}")
+        message_ids_to_delete.extend(context.user_data['last_check_messages'])
         context.user_data['last_check_messages'] = []
+    
+    # Remove excluded message ID if provided
+    if exclude_message_id and exclude_message_id in message_ids_to_delete:
+        message_ids_to_delete.remove(exclude_message_id)
+    
+    # Delete messages in parallel for better performance
+    if message_ids_to_delete:
+        import asyncio
+        delete_tasks = []
+        for msg_id in message_ids_to_delete:
+            delete_tasks.append(
+                bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            )
+        
+        # Execute deletions in parallel, but don't wait for all to complete
+        # This speeds up the response
+        try:
+            # Use asyncio.gather with return_exceptions=True to not fail on individual errors
+            results = await asyncio.gather(*delete_tasks, return_exceptions=True)
+            if DEBUG_MODE:
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.debug(f"Could not delete message {message_ids_to_delete[i]}: {result}")
+        except Exception as e:
+            if DEBUG_MODE:
+                logger.debug(f"Error during parallel message deletion: {e}")
 
 # Check callbacks
 async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2069,8 +2108,16 @@ async def edit_lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
         # Store lead data for editing
         # Map telegram_user to telegram_name for consistency
         lead_data = lead.copy()
-        if 'telegram_user' in lead_data and 'telegram_name' not in lead_data:
-            lead_data['telegram_name'] = lead_data.get('telegram_user')
+        if 'telegram_user' in lead_data and lead_data.get('telegram_user'):
+            # Map telegram_user to telegram_name for consistency in UI
+            if 'telegram_name' not in lead_data or not lead_data.get('telegram_name'):
+                lead_data['telegram_name'] = lead_data.get('telegram_user')
+        
+        # Ensure all fields are present (even if None/empty) for proper display
+        # This ensures indicators work correctly
+        for field in ['fullname', 'manager_name', 'phone', 'facebook_link', 'telegram_name', 'telegram_id']:
+            if field not in lead_data:
+                lead_data[field] = None
         
         user_data_store[user_id] = lead_data
         user_data_store_access_time[user_id] = time.time()
@@ -2097,20 +2144,25 @@ def get_edit_field_keyboard(user_id: int):
     user_data = user_data_store.get(user_id, {})
     keyboard = []
     
+    # Helper function to check if field has a value
+    def has_value(field_name):
+        value = user_data.get(field_name)
+        return value is not None and value != '' and (not isinstance(value, str) or value.strip() != '')
+    
     # Mandatory fields
-    fullname_status = "🟢" if user_data.get('fullname') else "⚪"
-    manager_status = "🟢" if user_data.get('manager_name') else "⚪"
+    fullname_status = "🟢" if has_value('fullname') else "⚪"
+    manager_status = "🟢" if has_value('manager_name') else "⚪"
     
     keyboard.append([InlineKeyboardButton(f"{fullname_status} Имя Фамилия *", callback_data="edit_field_fullname")])
     keyboard.append([InlineKeyboardButton(f"{manager_status} Агент *", callback_data="edit_field_manager")])
     
     # Identifier fields
-    phone_status = "🟢" if user_data.get('phone') else "⚪"
-    fb_link_status = "🟢" if user_data.get('facebook_link') else "⚪"
+    phone_status = "🟢" if has_value('phone') else "⚪"
+    fb_link_status = "🟢" if has_value('facebook_link') else "⚪"
     # Check both telegram_user (old) and telegram_name (new)
     telegram_name_value = user_data.get('telegram_name') or user_data.get('telegram_user')
-    telegram_name_status = "🟢" if telegram_name_value else "⚪"
-    telegram_id_status = "🟢" if user_data.get('telegram_id') else "⚪"
+    telegram_name_status = "🟢" if (telegram_name_value and telegram_name_value.strip()) else "⚪"
+    telegram_id_status = "🟢" if has_value('telegram_id') else "⚪"
     
     keyboard.append([InlineKeyboardButton(f"{phone_status} Phone", callback_data="edit_field_phone")])
     keyboard.append([InlineKeyboardButton(f"{fb_link_status} Facebook Link", callback_data="edit_field_fb_link")])
@@ -2241,19 +2293,27 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
     
     # Validation (same as add_save_callback)
-    if not user_data.get('fullname'):
+    # Check if fullname is empty or None
+    fullname_value = user_data.get('fullname')
+    if not fullname_value or (isinstance(fullname_value, str) and not fullname_value.strip()):
         await query.edit_message_text(
-            "❌ Ошибка: Full Name обязателен для заполнения!\n\n"
+            "❌ <b>Ошибка:</b> Имя Фамилия обязателен для заполнения!\n\n"
+            "⚠️ Пожалуйста, заполните это поле перед сохранением.\n\n"
             "Выберите поле для редактирования:",
-            reply_markup=get_edit_field_keyboard(user_id)
+            reply_markup=get_edit_field_keyboard(user_id),
+            parse_mode='HTML'
         )
         return EDIT_MENU
     
-    if not user_data.get('manager_name'):
+    # Check if manager_name is empty or None
+    manager_value = user_data.get('manager_name')
+    if not manager_value or (isinstance(manager_value, str) and not manager_value.strip()):
         await query.edit_message_text(
-            "❌ Ошибка: Manager Name обязателен для заполнения!\n\n"
+            "❌ <b>Ошибка:</b> Агент обязателен для заполнения!\n\n"
+            "⚠️ Пожалуйста, заполните это поле перед сохранением.\n\n"
             "Выберите поле для редактирования:",
-            reply_markup=get_edit_field_keyboard(user_id)
+            reply_markup=get_edit_field_keyboard(user_id),
+            parse_mode='HTML'
         )
         return EDIT_MENU
     
@@ -2278,14 +2338,18 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "❌ Ошибка: Не удалось подключиться к базе данных.",
             reply_markup=get_main_menu_keyboard()
         )
-    if user_id in user_data_store:
-        del user_data_store[user_id]
+        if user_id in user_data_store:
+            del user_data_store[user_id]
         if user_id in user_data_store_access_time:
             del user_data_store_access_time[user_id]
         return ConversationHandler.END
     
-    # Prepare update data (remove id and created_at)
-    update_data = {k: v for k, v in user_data.items() if k not in ['id', 'created_at']}
+    # Prepare update data (remove id, created_at, and telegram_user if telegram_name exists)
+    # Keep all existing fields, including empty ones (they will be updated in DB)
+    update_data = {}
+    for k, v in user_data.items():
+        if k not in ['id', 'created_at']:
+            update_data[k] = v
     
     # Normalize phone if present
     if 'phone' in update_data and update_data['phone']:
@@ -2293,18 +2357,34 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # Map telegram_name to telegram_user for database (backward compatibility)
     if 'telegram_name' in update_data:
-        update_data['telegram_user'] = update_data.pop('telegram_name')
+        telegram_name_value = update_data.pop('telegram_name')
+        # Only set telegram_user if telegram_name has a value
+        if telegram_name_value:
+            update_data['telegram_user'] = telegram_name_value
+        # If telegram_name is empty, also clear telegram_user
+        elif 'telegram_user' in update_data:
+            update_data['telegram_user'] = None
     
     try:
         # Update lead in database
-        response = client.table(TABLE_NAME).update(update_data).eq("id", lead_id).execute()
+        # Remove None values to avoid clearing fields unintentionally, but keep empty strings
+        # This ensures we update all fields that were in user_data
+        clean_update_data = {}
+        for k, v in update_data.items():
+            # Keep all values except None (None means field wasn't set)
+            # Empty strings are valid and should be saved
+            if v is not None:
+                clean_update_data[k] = v
+        
+        response = client.table(TABLE_NAME).update(clean_update_data).eq("id", lead_id).execute()
         
         if response.data:
             await query.edit_message_text(
-                "✅ Лид успешно обновлен!",
-                reply_markup=get_main_menu_keyboard()
+                "✅ <b>Лид успешно обновлен!</b>",
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode='HTML'
             )
-            logger.info(f"Updated lead {lead_id}: {update_data}")
+            logger.info(f"Updated lead {lead_id}: {clean_update_data}")
         else:
             await query.edit_message_text(
                 "❌ Ошибка: Данные не были обновлены. Попробуйте снова.",
