@@ -411,39 +411,74 @@ def get_field_format_requirements(field_name: str) -> str:
     """Get format requirements description for a field"""
     requirements = {
         'fullname': (
-            "⚠️ Требования к формату:\n"
-            "• Поле не может быть пустым"
+            "📋 <b>Требования к формату:</b>\n"
+            "• Поле <b>обязательное</b> для заполнения\n"
+            "• Введите имя и фамилию клиента\n"
+            "• Можно использовать любые буквы (русские, латинские)\n"
+            "• Пробелы между словами разрешены\n\n"
+            "💡 <b>Примеры:</b>\n"
+            "<code>Иван Иванов</code>\n"
+            "<code>John Smith</code>\n"
+            "<code>Мария Петрова-Сидорова</code>"
         ),
         'manager_name': (
-            "⚠️ Требования к формату:\n"
-            "• Поле не может быть пустым"
+            "📋 <b>Требования к формату:</b>\n"
+            "• Поле <b>обязательное</b> для заполнения\n"
+            "• Введите имя агента, который добавил лида\n"
+            "• Можно использовать любые буквы (русские, латинские)\n"
+            "• Пробелы между словами разрешены\n\n"
+            "💡 <b>Примеры:</b>\n"
+            "<code>Анна</code>\n"
+            "<code>Петр Сидоров</code>\n"
+            "<code>Maria</code>"
         ),
         'phone': (
-            "⚠️ Требования к формату:\n"
+            "📋 <b>Требования к формату:</b>\n"
+            "• Поле <b>опциональное</b> (можно пропустить)\n"
             "• Обязателен код страны\n"
-            "• Только цифры (без пробелов)\n"
+            "• Только цифры (без пробелов, дефисов, скобок)\n"
             "• Без знака '+' в начале\n"
-            "• От 10 до 15 цифр\n\n"
-            "Примеры: 79001234567, 380501234567"
+            "• От 10 до 15 цифр включительно\n\n"
+            "💡 <b>Примеры:</b>\n"
+            "<code>79001234567</code> (Россия)\n"
+            "<code>380501234567</code> (Украина)\n"
+            "<code>1234567890</code> (минимум 10 цифр)"
         ),
         'facebook_link': (
-            "Примеры:\n"
+            "📋 <b>Требования к формату:</b>\n"
+            "• Поле <b>опциональное</b> (можно пропустить)\n"
+            "• Можно вставить полную ссылку или только username/ID\n"
+            "• Бот автоматически извлечёт нужную информацию\n\n"
+            "💡 <b>Примеры:</b>\n"
             "<code>https://www.facebook.com/username</code>\n"
-            "<code>https://www.facebook.com/profile.php?id=61574753938463</code>"
+            "<code>www.facebook.com/username</code>\n"
+            "<code>facebook.com/username</code>\n"
+            "<code>https://www.facebook.com/profile.php?id=123456789012345</code>\n"
+            "<code>https://m.facebook.com/username</code>"
         ),
         'telegram_name': (
-            "Примеры:\n"
+            "📋 <b>Требования к формату:</b>\n"
+            "• Поле <b>опциональное</b> (можно пропустить)\n"
+            "• Введите username без символа @\n"
+            "• Можно использовать буквы, цифры, подчёркивания\n"
+            "• Пробелы не допускаются\n\n"
+            "💡 <b>Примеры:</b>\n"
             "<code>username</code>\n"
             "<code>Ivan_123</code>\n"
-            "<code>user123</code>\n\n"
-            "⚠️ Без символа @"
+            "<code>user123</code>\n"
+            "<code>john_doe</code>\n\n"
+            "⚠️ <b>Важно:</b> Не указывайте символ @ в начале"
         ),
         'telegram_id': (
-            "Примеры:\n"
+            "📋 <b>Требования к формату:</b>\n"
+            "• Поле <b>опциональное</b> (можно пропустить)\n"
+            "• Только цифры (без пробелов, букв, символов)\n"
+            "• Это числовой идентификатор пользователя Telegram\n\n"
+            "💡 <b>Примеры:</b>\n"
             "<code>123456789</code>\n"
-            "<code>555123456</code>\n\n"
-            "⚠️ Только цифры\n"
-            "⚠️ Без пробелов"
+            "<code>555123456</code>\n"
+            "<code>9876543210</code>\n\n"
+            "⚠️ <b>Важно:</b> Только цифры, без пробелов и других символов"
         )
     }
     return requirements.get(field_name, "")
@@ -907,8 +942,9 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Start with first field: Full Name
         field_label = get_field_label('fullname')
         _, _, current_step, total_steps = get_next_add_field('')
+        requirements = get_field_format_requirements('fullname')
         
-        message = f"<b>Шаг {current_step} из {total_steps}</b>\n\n📝 Введите {field_label}:"
+        message = f"<b>Шаг {current_step} из {total_steps}</b>\n\n📝 Введите {field_label}:\n\n{requirements}"
         
         await query.edit_message_text(
             message,
@@ -1493,14 +1529,10 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             field_label = get_field_label(field_name)
             is_optional = field_name not in ['fullname', 'manager_name']
             
-            # Для обязательных полей (fullname, manager_name) не показываем требования к формату
-            if field_name in ['fullname', 'manager_name']:
-                message = f"❌ Поле не может быть пустым.\n\n📝 Введите {field_label}:"
-                use_html = False
-            else:
-                requirements = get_field_format_requirements(field_name)
-                message = f"❌ Поле не может быть пустым.\n\n📝 Введите {field_label}:\n\n{requirements}"
-                use_html = True
+            # Показываем требования к формату для всех полей
+            requirements = get_field_format_requirements(field_name)
+            message = f"❌ Поле не может быть пустым.\n\n📝 Введите {field_label}:\n\n{requirements}"
+            use_html = True
             
             sent_message = await update.message.reply_text(
                 message,
@@ -1550,12 +1582,9 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Add progress indicator
         progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         
-        # Для обязательных полей (fullname, manager_name) не показываем требования к формату
-        if next_field in ['fullname', 'manager_name']:
-            message = f"{progress_text}📝 Введите {field_label}:"
-        else:
-            requirements = get_field_format_requirements(next_field)
-            message = f"{progress_text}📝 Введите {field_label}:\n\n{requirements}"
+        # Показываем требования к формату для всех полей
+        requirements = get_field_format_requirements(next_field)
+        message = f"{progress_text}📝 Введите {field_label}:\n\n{requirements}"
         
         context.user_data['current_field'] = next_field
         context.user_data['current_state'] = next_state
@@ -1737,12 +1766,9 @@ async def add_skip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Add progress indicator
         progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         
-        # Для обязательных полей (fullname, manager_name) не показываем требования к формату
-        if next_field in ['fullname', 'manager_name']:
-            message = f"{progress_text}📝 Введите {field_label}:"
-        else:
-            requirements = get_field_format_requirements(next_field)
-            message = f"{progress_text}📝 Введите {field_label}:\n\n{requirements}"
+        # Показываем требования к формату для всех полей
+        requirements = get_field_format_requirements(next_field)
+        message = f"{progress_text}📝 Введите {field_label}:\n\n{requirements}"
         
         context.user_data['current_field'] = next_field
         context.user_data['current_state'] = next_state
@@ -1792,12 +1818,9 @@ async def add_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, _, current_step, total_steps = get_next_add_field(prev_field)
         progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         
-        # Для обязательных полей (fullname, manager_name) не показываем требования к формату
-        if prev_field in ['fullname', 'manager_name']:
-            message = f"{progress_text}📝 Введите {field_label}:"
-        else:
-            requirements = get_field_format_requirements(prev_field)
-            message = f"{progress_text}📝 Введите {field_label}:\n\n{requirements}"
+        # Показываем требования к формату для всех полей
+        requirements = get_field_format_requirements(prev_field)
+        message = f"{progress_text}📝 Введите {field_label}:\n\n{requirements}"
         
         context.user_data['current_field'] = prev_field
         context.user_data['current_state'] = prev_state
