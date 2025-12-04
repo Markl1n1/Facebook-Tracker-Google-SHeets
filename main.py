@@ -936,6 +936,16 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         user_id = query.from_user.id
         
+        # Clear any existing conversation state before starting new one
+        # This ensures we can start a new conversation even if user is in another ConversationHandler state
+        if context.user_data:
+            # Keep only essential data, clear conversation states
+            keys_to_remove = ['current_field', 'current_state', 'add_step', 'editing_lead_id', 
+                            'last_check_messages', 'add_message_ids']
+            for key in keys_to_remove:
+                if key in context.user_data:
+                    del context.user_data[key]
+        
         user_data_store[user_id] = {}
         user_data_store_access_time[user_id] = time.time()
         context.user_data['current_field'] = 'fullname'
