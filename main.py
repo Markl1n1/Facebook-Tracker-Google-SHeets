@@ -2439,11 +2439,6 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
-    if user_id in user_data_store:
-        del user_data_store[user_id]
-        if user_id in user_data_store_access_time:
-            del user_data_store_access_time[user_id]
-        return ConversationHandler.END
     
     # Prepare update data (remove id, created_at, and telegram_user if telegram_name exists)
     # Keep all existing fields, including empty ones (they will be updated in DB)
