@@ -2168,6 +2168,12 @@ async def edit_pin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if text == PIN_CODE:
         # PIN is correct, show edit menu
+        # Clear any old field editing state to prevent automatic transitions
+        if 'current_field' in context.user_data:
+            del context.user_data['current_field']
+        if 'current_state' in context.user_data:
+            del context.user_data['current_state']
+        
         if user_id not in user_data_store and lead_id:
             # Reload lead data if missing
             client = get_supabase_client()
@@ -2260,6 +2266,21 @@ async def edit_field_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Universal handler for edit field input"""
     user_id = update.effective_user.id
+    
+    # Check for /skip command first
+    if update.message and update.message.text and update.message.text.strip() == "/skip":
+        # User wants to skip changing this field, return to edit menu
+        await update.message.reply_text(
+            "✏️ Выберите поле для редактирования:",
+            reply_markup=get_edit_field_keyboard(user_id)
+        )
+        # Clear current_field to prevent issues
+        if 'current_field' in context.user_data:
+            del context.user_data['current_field']
+        if 'current_state' in context.user_data:
+            del context.user_data['current_state']
+        return EDIT_MENU
+    
     text = update.message.text.strip()
     field_name = context.user_data.get('current_field')
     
@@ -2885,7 +2906,10 @@ def create_telegram_app():
             EDIT_TELEGRAM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
             EDIT_MANAGER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
         },
-        fallbacks=[CommandHandler("q", quit_command)],
+        fallbacks=[
+            CommandHandler("q", quit_command),
+            CommandHandler("skip", lambda u, c: edit_field_input(u, c)),
+        ],
         per_message=False,
     )
     
