@@ -434,7 +434,7 @@ def get_field_format_requirements(field_name: str) -> str:
         'manager_name': (
             "📋 <b>Требования к формату:</b>\n"
             "• Поле <b>обязательное</b> для заполнения\n"
-            "• Введите имя агента, который добавил лида\n"
+            "• Введите стейдж менеджера (так менеджер записан в отчётности)\n"
             "• Можно использовать любые буквы (русские, латинские)\n"
             "• Пробелы между словами разрешены\n\n"
             "💡 <b>Примеры:</b>\n"
@@ -1532,7 +1532,10 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_optional = field_name not in ['fullname', 'manager_name']
             
             # Для обязательных полей (fullname, manager_name) не показываем требования к формату
-            if field_name in ['fullname', 'manager_name']:
+            if field_name == 'manager_name':
+                message = f"❌ Поле не может быть пустым.\n\n📝 Введите стейдж менеджера:\n*Так менеджер записан в отчётности"
+                use_html = False
+            elif field_name == 'fullname':
                 message = f"❌ Поле не может быть пустым.\n\n📝 Введите {field_label}:"
                 use_html = False
             else:
@@ -1589,7 +1592,9 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         
         # Для обязательных полей (fullname, manager_name) не показываем требования к формату
-        if next_field in ['fullname', 'manager_name']:
+        if next_field == 'manager_name':
+            message = f"{progress_text}📝 Введите стейдж менеджера:\n*Так менеджер записан в отчётности"
+        elif next_field == 'fullname':
             message = f"{progress_text}📝 Введите {field_label}:"
         else:
             requirements = get_field_format_requirements(next_field)
@@ -1781,7 +1786,9 @@ async def add_skip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         
         # Для обязательных полей (fullname, manager_name) не показываем требования к формату
-        if next_field in ['fullname', 'manager_name']:
+        if next_field == 'manager_name':
+            message = f"{progress_text}📝 Введите стейдж менеджера:\n*Так менеджер записан в отчётности"
+        elif next_field == 'fullname':
             message = f"{progress_text}📝 Введите {field_label}:"
         else:
             requirements = get_field_format_requirements(next_field)
@@ -1836,7 +1843,9 @@ async def add_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         
         # Для обязательных полей (fullname, manager_name) не показываем требования к формату
-        if prev_field in ['fullname', 'manager_name']:
+        if prev_field == 'manager_name':
+            message = f"{progress_text}📝 Введите стейдж менеджера:\n*Так менеджер записан в отчётности"
+        elif prev_field == 'fullname':
             message = f"{progress_text}📝 Введите {field_label}:"
         else:
             requirements = get_field_format_requirements(prev_field)
@@ -1890,7 +1899,7 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         progress_text = f"<b>Шаг {current_step} из {total_steps}</b>\n\n"
         await query.edit_message_text(
             f"{progress_text}❌ <b>Ошибка:</b> {field_label} обязателен для заполнения!\n\n"
-            f"📝 Введите {field_label}:",
+            f"📝 Введите стейдж менеджера:\n*Так менеджер записан в отчётности",
             reply_markup=get_navigation_keyboard(is_optional=False, show_back=True),
             parse_mode='HTML'
         )
