@@ -2829,8 +2829,7 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             update_data['telegram_user'] = None
     
     try:
-        # Update lead in database
-        # Remove None values to avoid clearing fields unintentionally, but keep empty strings
+
         # This ensures we update all fields that were in user_data
         clean_update_data = {}
         for k, v in update_data.items():
@@ -3211,16 +3210,7 @@ def create_telegram_app():
     telegram_app.add_handler(check_fullname_conv)
     telegram_app.add_handler(add_conv)
     
-    # Add callback query handler for menu navigation buttons and edit lead
-    # Registered AFTER ConversationHandlers so they have priority
-    # Note: add_new is included here as fallback, but ConversationHandler should catch it first
-    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu|add_menu|add_new)$"))
-    
-    # Add handler for unknown commands during conversations (must be after command handlers)
-    # Exclude /start, /q, and /skip (skip is handled by ConversationHandlers)
-    telegram_app.add_handler(MessageHandler(filters.COMMAND & ~filters.Regex("^(/start|/q|/skip)$"), unknown_command_handler))
-    
-    # Edit conversation handler
+    # Edit conversation handler - register with other ConversationHandlers for priority
     edit_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(edit_lead_entry_callback, pattern="^edit_lead_\\d+$"),
@@ -3258,8 +3248,16 @@ def create_telegram_app():
         ],
         per_message=False,
     )
-    
     telegram_app.add_handler(edit_conv)
+    
+    # Add callback query handler for menu navigation buttons
+    # Registered AFTER ConversationHandlers so they have priority
+    # Note: add_new is included here as fallback, but ConversationHandler should catch it first
+    telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu|add_menu|add_new)$"))
+    
+    # Add handler for unknown commands during conversations (must be after command handlers)
+    # Exclude /start, /q, and /skip (skip is handled by ConversationHandlers)
+    telegram_app.add_handler(MessageHandler(filters.COMMAND & ~filters.Regex("^(/start|/q|/skip)$"), unknown_command_handler))
     
     # Add global fallback for unknown callback queries (must be last, after all ConversationHandlers)
     telegram_app.add_handler(CallbackQueryHandler(unknown_callback_handler))
