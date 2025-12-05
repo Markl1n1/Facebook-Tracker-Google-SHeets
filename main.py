@@ -1167,8 +1167,9 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
             else:
                 last_digits = search_value
             
-            # Supabase REST использует * как wildcard, а не %
-            pattern = f"*{last_digits}"
+            # For Supabase Python client, use % as wildcard (SQL standard)
+            # Search by suffix: any characters before the last digits
+            pattern = f"%{last_digits}"
             
             # Search by suffix using ilike (case-insensitive pattern matching)
             # Limit results to 50 for performance
@@ -1316,6 +1317,16 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Для поиска по имени необходимо минимум 3 символа. Попробуйте снова:")
         return CHECK_BY_FULLNAME
     
+    # Normalize search value: remove extra spaces, trim
+    search_value = re.sub(r'\s+', ' ', search_value).strip()
+    
+    # Escape special characters for LIKE/ILIKE pattern matching
+    # In SQL LIKE/ILIKE, % and _ are special characters that need to be escaped
+    # Escape % and _ by replacing them with \% and \_
+    escaped_search_value = search_value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    
+    logger.info(f"[FULLNAME SEARCH] Normalized search value: '{search_value}' -> escaped: '{escaped_search_value}'")
+    
     # Get Supabase client
     client = get_supabase_client()
     if not client:
@@ -1333,7 +1344,9 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Limit to 10 results at DB level for better performance
         # Sort by created_at descending (newest first)
         # For ilike in Supabase Python client, use % as wildcard (SQL standard)
-        pattern = f"%{search_value}%"
+        # Pattern: %escaped_value% - finds records where fullname contains the search value
+        # This works for both full matches and partial matches
+        pattern = f"%{escaped_search_value}%"
         logger.info(f"[FULLNAME SEARCH] Using pattern: '{pattern}' for field 'fullname'")
         logger.info(f"[FULLNAME SEARCH] Executing query: SELECT * FROM {TABLE_NAME} WHERE fullname ILIKE '{pattern}' ORDER BY created_at DESC LIMIT 10")
         
@@ -1344,11 +1357,12 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"[FULLNAME SEARCH] Response.data length: {len(response.data) if hasattr(response, 'data') and response.data else 0}")
         
         if hasattr(response, 'data') and response.data:
-            logger.info(f"[FULLNAME SEARCH] Found {len(response.data)} results")
-            for idx, result in enumerate(response.data[:3], 1):  # Log first 3 results
-                logger.info(f"[FULLNAME SEARCH] Result {idx}: id={result.get('id')}, fullname='{result.get('fullname')}'")
+            logger.info(f"[FULLNAME SEARCH] ✅ Found {len(response.data)} results for pattern '{pattern}'")
+            for idx, result in enumerate(response.data[:5], 1):  # Log first 5 results
+                fullname = result.get('fullname', 'N/A')
+                logger.info(f"[FULLNAME SEARCH] Result {idx}: id={result.get('id')}, fullname='{fullname}' (matches: {escaped_search_value.lower() in str(fullname).lower() if fullname else False})")
         else:
-            logger.warning(f"[FULLNAME SEARCH] No results found or response.data is empty/None")
+            logger.warning(f"[FULLNAME SEARCH] ❌ No results found for pattern '{pattern}' (search_value: '{search_value}', escaped: '{escaped_search_value}')")
         
         # Field labels mapping (Russian)
         field_labels = {
@@ -1453,7 +1467,7 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
             reply_markup = InlineKeyboardMarkup(keyboard)
         else:
-            logger.warning(f"[FULLNAME SEARCH] No results found for pattern '{pattern}'")
+            logger.warning(f"[FULLNAME SEARCH] ❌ No results found for pattern '{pattern}' (search_value: '{search_value}', escaped: '{escaped_search_value}')")
             message = "❌ <b>Клиент не найден</b>."
             reply_markup = get_main_menu_keyboard()
         
@@ -1464,8 +1478,8 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
     except Exception as e:
-        logger.error(f"[FULLNAME SEARCH] Error checking by fullname: {e}", exc_info=True)
-        logger.error(f"[FULLNAME SEARCH] Search value was: '{search_value}', pattern was: '{pattern if 'pattern' in locals() else 'N/A'}'")
+        logger.error(f"[FULLNAME SEARCH] ❌ Error checking by fullname: {e}", exc_info=True)
+        logger.error(f"[FULLNAME SEARCH] Search value was: '{search_value}', escaped: '{escaped_search_value if 'escaped_search_value' in locals() else 'N/A'}', pattern was: '{pattern if 'pattern' in locals() else 'N/A'}'")
         error_msg = "❌ Произошла ошибка при проверке. Попробуйте позже или обратитесь к администратору."
         await update.message.reply_text(
             error_msg,
@@ -2382,30 +2396,52 @@ async def edit_pin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 'current_state' in context.user_data:
             del context.user_data['current_state']
         
-        if user_id not in user_data_store and lead_id:
-            # Reload lead data if missing
-            client = get_supabase_client()
-            if client:
-                try:
-                    response = client.table(TABLE_NAME).select("*").eq("id", lead_id).execute()
-                    if response.data and len(response.data) > 0:
-                        lead = response.data[0]
-                        lead_data = lead.copy()
-                        if 'telegram_user' in lead_data and lead_data.get('telegram_user'):
-                            if 'telegram_name' not in lead_data or not lead_data.get('telegram_name'):
-                                lead_data['telegram_name'] = lead_data.get('telegram_user')
-                        for field in ['fullname', 'manager_name', 'phone', 'facebook_link', 'telegram_name', 'telegram_id']:
-                            if field not in lead_data:
-                                lead_data[field] = None
-                        user_data_store[user_id] = lead_data
-                        user_data_store_access_time[user_id] = time.time()
-                except Exception as e:
-                    logger.error(f"Error reloading lead data in PIN handler: {e}", exc_info=True)
+        # Always reload lead data to ensure we have the latest from DB
+        client = get_supabase_client()
+        if client:
+            try:
+                response = client.table(TABLE_NAME).select("*").eq("id", lead_id).execute()
+                if response.data and len(response.data) > 0:
+                    lead = response.data[0]
+                    lead_data = lead.copy()
+                    if 'telegram_user' in lead_data and lead_data.get('telegram_user'):
+                        if 'telegram_name' not in lead_data or not lead_data.get('telegram_name'):
+                            lead_data['telegram_name'] = lead_data.get('telegram_user')
+                    # Ensure all fields are present (even if None)
+                    for field in ['fullname', 'manager_name', 'phone', 'facebook_link', 'telegram_name', 'telegram_id']:
+                        if field not in lead_data:
+                            lead_data[field] = None
+                    
+                    # Save original data for comparison (deep copy)
+                    context.user_data['original_lead_data'] = lead_data.copy()
+                    
+                    # Initialize user_data_store with current data
+                    user_data_store[user_id] = lead_data.copy()
+                    user_data_store_access_time[user_id] = time.time()
+                else:
+                    await update.message.reply_text(
+                        "❌ Ошибка: Лид не найден в базе данных.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+            except Exception as e:
+                logger.error(f"Error reloading lead data in PIN handler: {e}", exc_info=True)
+                await update.message.reply_text(
+                    "❌ Ошибка: Не удалось загрузить данные лида.",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                return ConversationHandler.END
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка: Не удалось подключиться к базе данных.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
         
         message = f"✏️ Редактирование лида (ID: {lead_id})\n\nВыберите поле для редактирования:"
         await update.message.reply_text(
             message,
-            reply_markup=get_edit_field_keyboard(user_id)
+            reply_markup=get_edit_field_keyboard(user_id, context.user_data.get('original_lead_data', {}))
         )
         return EDIT_MENU
     else:
@@ -2415,8 +2451,8 @@ async def edit_pin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return EDIT_PIN
 
-def get_edit_field_keyboard(user_id: int):
-    """Create keyboard for editing lead fields"""
+def get_edit_field_keyboard(user_id: int, original_data: dict = None):
+    """Create keyboard for editing lead fields with change indicators"""
     user_data = user_data_store.get(user_id, {})
     keyboard = []
     
@@ -2425,20 +2461,43 @@ def get_edit_field_keyboard(user_id: int):
         value = user_data.get(field_name)
         return value is not None and value != '' and (not isinstance(value, str) or value.strip() != '')
     
+    # Helper function to check if field was changed
+    def is_changed(field_name):
+        if not original_data:
+            return False
+        current_value = user_data.get(field_name)
+        original_value = original_data.get(field_name)
+        # Handle telegram_user/telegram_name mapping
+        if field_name == 'telegram_name':
+            original_value = original_data.get('telegram_name') or original_data.get('telegram_user')
+        # Compare values (handle None and empty strings)
+        if current_value is None and (original_value is None or original_value == ''):
+            return False
+        if current_value == '' and (original_value is None or original_value == ''):
+            return False
+        return str(current_value).strip() != str(original_value).strip() if original_value else current_value is not None
+    
+    # Helper function to get status indicator
+    def get_status(field_name):
+        if is_changed(field_name):
+            return "🟡"  # Changed
+        elif has_value(field_name):
+            return "🟢"  # Filled, not changed
+        else:
+            return "⚪"  # Empty
+    
     # Mandatory fields
-    fullname_status = "🟢" if has_value('fullname') else "⚪"
-    manager_status = "🟢" if has_value('manager_name') else "⚪"
+    fullname_status = get_status('fullname')
+    manager_status = get_status('manager_name')
     
     keyboard.append([InlineKeyboardButton(f"{fullname_status} Имя Фамилия *", callback_data="edit_field_fullname")])
     keyboard.append([InlineKeyboardButton(f"{manager_status} Агент *", callback_data="edit_field_manager")])
     
     # Identifier fields
-    phone_status = "🟢" if has_value('phone') else "⚪"
-    fb_link_status = "🟢" if has_value('facebook_link') else "⚪"
-    # Check both telegram_user (old) and telegram_name (new)
-    telegram_name_value = user_data.get('telegram_name') or user_data.get('telegram_user')
-    telegram_name_status = "🟢" if (telegram_name_value and telegram_name_value.strip()) else "⚪"
-    telegram_id_status = "🟢" if has_value('telegram_id') else "⚪"
+    phone_status = get_status('phone')
+    fb_link_status = get_status('facebook_link')
+    telegram_name_status = get_status('telegram_name')
+    telegram_id_status = get_status('telegram_id')
     
     keyboard.append([InlineKeyboardButton(f"{phone_status} Номер телефона", callback_data="edit_field_phone")])
     keyboard.append([InlineKeyboardButton(f"{fb_link_status} Facebook Ссылка", callback_data="edit_field_fb_link")])
@@ -2484,7 +2543,7 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # User wants to skip changing this field, return to edit menu
         await update.message.reply_text(
             "✏️ Выберите поле для редактирования:",
-            reply_markup=get_edit_field_keyboard(user_id)
+            reply_markup=get_edit_field_keyboard(user_id, context.user_data.get('original_lead_data', {}))
         )
         # Clear current_field to prevent issues
         if 'current_field' in context.user_data:
@@ -2502,7 +2561,7 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ {field_label} слишком длинное (максимум 500 символов).\n\n"
             f"Попробуйте снова:",
-            reply_markup=get_edit_field_keyboard(user_id)
+            reply_markup=get_edit_field_keyboard(user_id, context.user_data.get('original_lead_data', {}))
         )
         return context.user_data.get('current_state', EDIT_MENU)
     
@@ -2527,6 +2586,9 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         for field in ['fullname', 'manager_name', 'phone', 'facebook_link', 'telegram_name', 'telegram_id']:
                             if field not in lead_data:
                                 lead_data[field] = None
+                        # Save original data if not already saved
+                        if 'original_lead_data' not in context.user_data:
+                            context.user_data['original_lead_data'] = lead_data.copy()
                         user_data_store[user_id] = lead_data
                         user_data_store_access_time[user_id] = time.time()
                 except Exception as e:
@@ -2607,12 +2669,22 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data_store[user_id][field_name] = normalized_value
         # Update access time after saving
         user_data_store_access_time[user_id] = time.time()
-    
-    # Show edit menu again
-    await update.message.reply_text(
-        "✏️ Выберите поле для редактирования:",
-        reply_markup=get_edit_field_keyboard(user_id)
-    )
+        
+        # Show confirmation message
+        field_label = get_field_label(field_name)
+        await update.message.reply_text(
+            f"✅ <b>{field_label}</b> успешно изменено!\n\n"
+            f"Новое значение: <code>{normalized_value}</code>\n\n"
+            f"Выберите следующее поле для редактирования:",
+            parse_mode='HTML',
+            reply_markup=get_edit_field_keyboard(user_id, context.user_data.get('original_lead_data', {}))
+        )
+    else:
+        # Show edit menu again (validation failed or value is empty)
+        await update.message.reply_text(
+            "✏️ Выберите поле для редактирования:",
+            reply_markup=get_edit_field_keyboard(user_id, context.user_data.get('original_lead_data', {}))
+        )
     return EDIT_MENU
 
 async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2629,26 +2701,39 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return ConversationHandler.END
     
-    # Ensure user_data_store exists and reload if missing
-    if user_id not in user_data_store:
-        client = get_supabase_client()
-        if client:
-            try:
-                response = client.table(TABLE_NAME).select("*").eq("id", lead_id).execute()
-                if response.data and len(response.data) > 0:
-                    lead = response.data[0]
-                    lead_data = lead.copy()
-                    if 'telegram_user' in lead_data and lead_data.get('telegram_user'):
-                        if 'telegram_name' not in lead_data or not lead_data.get('telegram_name'):
-                            lead_data['telegram_name'] = lead_data.get('telegram_user')
-                    for field in ['fullname', 'manager_name', 'phone', 'facebook_link', 'telegram_name', 'telegram_id']:
-                        if field not in lead_data:
-                            lead_data[field] = None
-                    user_data_store[user_id] = lead_data
-                    user_data_store_access_time[user_id] = time.time()
-            except Exception as e:
-                logger.error(f"Error reloading lead data in save: {e}", exc_info=True)
+    # Get Supabase client first
+    client = get_supabase_client()
+    if not client:
+        await query.edit_message_text(
+            "❌ Ошибка: Не удалось подключиться к базе данных.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
     
+    # Load current data from database for merge logic
+    try:
+        response = client.table(TABLE_NAME).select("*").eq("id", lead_id).execute()
+        if not response.data or len(response.data) == 0:
+            await query.edit_message_text(
+                "❌ Ошибка: Лид не найден в базе данных.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        current_db_data = response.data[0].copy()
+        # Map telegram_user to telegram_name for comparison
+        if 'telegram_user' in current_db_data and current_db_data.get('telegram_user'):
+            if 'telegram_name' not in current_db_data or not current_db_data.get('telegram_name'):
+                current_db_data['telegram_name'] = current_db_data.get('telegram_user')
+    except Exception as e:
+        logger.error(f"Error loading current lead data in save: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ошибка: Не удалось загрузить данные лида из базы.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    # Get user_data (changes made by user)
     user_data = user_data_store.get(user_id, {})
     
     # Validation (same as add_save_callback)
@@ -2659,7 +2744,7 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "❌ <b>Ошибка:</b> Имя Фамилия обязателен для заполнения!\n\n"
             "⚠️ Пожалуйста, заполните это поле перед сохранением.\n\n"
             "Выберите поле для редактирования:",
-            reply_markup=get_edit_field_keyboard(user_id),
+            reply_markup=get_edit_field_keyboard(user_id, context.user_data.get('original_lead_data', {})),
             parse_mode='HTML'
         )
         return EDIT_MENU
@@ -2671,7 +2756,7 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "❌ <b>Ошибка:</b> Агент обязателен для заполнения!\n\n"
             "⚠️ Пожалуйста, заполните это поле перед сохранением.\n\n"
             "Выберите поле для редактирования:",
-            reply_markup=get_edit_field_keyboard(user_id),
+            reply_markup=get_edit_field_keyboard(user_id, context.user_data.get('original_lead_data', {})),
             parse_mode='HTML'
         )
         return EDIT_MENU
@@ -2686,25 +2771,49 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "❌ Ошибка: Необходимо указать минимум одно из полей:\n"
             "Номер телефона, Facebook Ссылка, Имя пользователя Telegram или Telegram ID!\n\n"
             "Выберите поле для редактирования:",
-            reply_markup=get_edit_field_keyboard(user_id)
+            reply_markup=get_edit_field_keyboard(user_id, context.user_data.get('original_lead_data', {}))
         )
         return EDIT_MENU
     
-    # Get Supabase client
-    client = get_supabase_client()
-    if not client:
-        await query.edit_message_text(
-            "❌ Ошибка: Не удалось подключиться к базе данных.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
+    # Merge logic: Start with current DB data, apply only changes from user_data_store
+    # This ensures unchanged fields are not lost
+    update_data = current_db_data.copy()
     
-    # Prepare update data (remove id, created_at, and telegram_user if telegram_name exists)
-    # Keep all existing fields, including empty ones (they will be updated in DB)
-    update_data = {}
-    for k, v in user_data.items():
-        if k not in ['id', 'created_at']:
-            update_data[k] = v
+    # Remove fields that shouldn't be updated
+    for field in ['id', 'created_at']:
+        update_data.pop(field, None)
+    
+    # Apply only fields that were changed by the user
+    # Compare with original data to determine what was actually changed
+    original_data = context.user_data.get('original_lead_data', {})
+    
+    # Fields that can be edited
+    editable_fields = ['fullname', 'manager_name', 'phone', 'facebook_link', 'telegram_name', 'telegram_id']
+    
+    for field in editable_fields:
+        if field in user_data:
+            # Get current value from user_data (what user entered/changed)
+            current_value = user_data.get(field)
+            # Get original value (when editing started)
+            original_value = original_data.get(field)
+            # Handle telegram_user/telegram_name mapping for original
+            if field == 'telegram_name':
+                original_value = original_data.get('telegram_name') or original_data.get('telegram_user')
+            
+            # Normalize values for comparison (handle None, empty strings, whitespace)
+            def normalize_for_compare(val):
+                if val is None:
+                    return ''
+                if isinstance(val, str):
+                    return val.strip()
+                return str(val).strip()
+            
+            current_normalized = normalize_for_compare(current_value)
+            original_normalized = normalize_for_compare(original_value)
+            
+            # If value changed, update it
+            if current_normalized != original_normalized:
+                update_data[field] = current_value
     
     # Normalize phone if present
     if 'phone' in update_data and update_data['phone']:
@@ -2760,6 +2869,8 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         del user_data_store_access_time[user_id]
     if 'editing_lead_id' in context.user_data:
         del context.user_data['editing_lead_id']
+    if 'original_lead_data' in context.user_data:
+        del context.user_data['original_lead_data']
     
     return ConversationHandler.END
 
@@ -2793,6 +2904,8 @@ async def edit_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         del user_data_store_access_time[user_id]
     if 'editing_lead_id' in context.user_data:
         del context.user_data['editing_lead_id']
+    if 'original_lead_data' in context.user_data:
+        del context.user_data['original_lead_data']
     
     await query.edit_message_text(
         "❌ Редактирование отменено.",
