@@ -1318,12 +1318,12 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = get_supabase_client()
     if not client:
         error_msg = get_user_friendly_error(Exception("Database connection failed"), "подключении к базе данных")
-    await update.message.reply_text(
-        error_msg,
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode='HTML'
-    )
-    return ConversationHandler.END
+        await update.message.reply_text(
+            error_msg,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return ConversationHandler.END
     
     try:
         # Search using ilike with contains pattern (case-insensitive)
