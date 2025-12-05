@@ -813,14 +813,14 @@ async def unknown_callback_handler(update: Update, context: ContextTypes.DEFAULT
     return ConversationHandler.END
 
 async def unknown_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle commands sent during ConversationHandler (except /q and /start)"""
+    """Handle commands sent during ConversationHandler (except /q, /start, and /skip)"""
     if not update.message or not update.message.text:
         return
     
     command = update.message.text.strip().split()[0] if update.message.text else ""
     
-    # Ignore /q and /start as they are handled separately
-    if command in ["/q", "/start"]:
+    # Ignore /q, /start, and /skip as they are handled separately
+    if command in ["/q", "/start", "/skip"]:
         return
     
     # Show message that command is not available during conversation
@@ -1157,21 +1157,20 @@ async def check_by_field(update: Update, context: ContextTypes.DEFAULT_TYPE, fie
         return ConversationHandler.END
     
     try:
-        # For phone: search by last 7-9 digits
+        # For phone: search using contains pattern (works for full and partial matches)
         if db_field_name == "phone":
-            # Extract last 7-9 digits
-            if len(search_value) >= 9:
-                last_digits = search_value[-9:]
-            elif len(search_value) >= 7:
-                last_digits = search_value[-7:]
-            else:
-                last_digits = search_value
+            # Escape special characters for LIKE/ILIKE pattern matching
+            # In SQL LIKE/ILIKE, % and _ are special characters that need to be escaped
+            escaped_search_value = search_value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
             
-            # For Supabase Python client, use % as wildcard (SQL standard)
-            # Search by suffix: any characters before the last digits
-            pattern = f"%{last_digits}"
+            # Use contains pattern: %escaped_value% - finds records where phone contains the search value
+            # This works for both full matches and partial matches (last digits)
+            # Example: "0501234560" will find "0501234560", "+380501234560", etc.
+            pattern = f"%{escaped_search_value}%"
             
-            # Search by suffix using ilike (case-insensitive pattern matching)
+            logger.info(f"[PHONE SEARCH] Using pattern: '{pattern}' for field 'phone' (search_value: '{search_value}')")
+            
+            # Search using ilike (case-insensitive pattern matching)
             # Limit results to 50 for performance
             response = (
                 client.table(TABLE_NAME)
@@ -3218,7 +3217,8 @@ def create_telegram_app():
     telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu|add_menu|add_new)$"))
     
     # Add handler for unknown commands during conversations (must be after command handlers)
-    telegram_app.add_handler(MessageHandler(filters.COMMAND & ~filters.Regex("^(/start|/q)$"), unknown_command_handler))
+    # Exclude /start, /q, and /skip (skip is handled by ConversationHandlers)
+    telegram_app.add_handler(MessageHandler(filters.COMMAND & ~filters.Regex("^(/start|/q|/skip)$"), unknown_command_handler))
     
     # Edit conversation handler
     edit_conv = ConversationHandler(
