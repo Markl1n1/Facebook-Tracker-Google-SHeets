@@ -1872,7 +1872,6 @@ async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Field labels for uniqueness check messages (Russian)
 UNIQUENESS_FIELD_LABELS = {
     'phone': 'Номер телефона',
-    'fullname': 'Клиент',
     'facebook_link': 'Facebook Ссылка',
     'telegram_name': 'Имя пользователя Telegram',
     'telegram_id': 'Telegram ID'
@@ -2131,12 +2130,15 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     # Check uniqueness of fields - optimized batch check
+    # Only check optional identifier fields (phone, facebook_link, telegram_name, telegram_id)
+    # Do NOT check fullname and manager_name - they can be duplicated
     logger.info(f"[ADD_SAVE] Before uniqueness check - user_data keys: {list(user_data.keys())}")
     if 'telegram_name' in user_data:
         logger.info(f"[ADD_SAVE] Before uniqueness check - telegram_name: '{user_data.get('telegram_name')}'")
     
     fields_to_check = {}
-    for field_name in ['phone', 'fullname', 'facebook_link', 'telegram_name', 'telegram_id']:
+    # Only check optional identifier fields for uniqueness
+    for field_name in ['phone', 'facebook_link', 'telegram_name', 'telegram_id']:
         field_value = user_data.get(field_name)
         if field_value and field_value.strip():  # Only check non-empty fields
             # Normalize phone if checking phone field
