@@ -1305,6 +1305,8 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check by fullname using contains search with limit of 10 results"""
     search_value = update.message.text.strip()
     
+    logger.info(f"[FULLNAME SEARCH] Starting search with value: '{search_value}' (length: {len(search_value)}, type: {type(search_value)})")
+    
     if not search_value:
         await update.message.reply_text("❌ Имя не может быть пустым. Попробуйте снова:")
         return CHECK_BY_FULLNAME
@@ -1317,6 +1319,7 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get Supabase client
     client = get_supabase_client()
     if not client:
+        logger.error("[FULLNAME SEARCH] Failed to get Supabase client")
         error_msg = get_user_friendly_error(Exception("Database connection failed"), "подключении к базе данных")
         await update.message.reply_text(
             error_msg,
@@ -1331,7 +1334,21 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Sort by created_at descending (newest first)
         # For ilike in Supabase Python client, use % as wildcard (SQL standard)
         pattern = f"%{search_value}%"
+        logger.info(f"[FULLNAME SEARCH] Using pattern: '{pattern}' for field 'fullname'")
+        logger.info(f"[FULLNAME SEARCH] Executing query: SELECT * FROM {TABLE_NAME} WHERE fullname ILIKE '{pattern}' ORDER BY created_at DESC LIMIT 10")
+        
         response = client.table(TABLE_NAME).select("*").ilike("fullname", pattern).order("created_at", desc=True).limit(10).execute()
+        
+        logger.info(f"[FULLNAME SEARCH] Query executed. Response type: {type(response)}, has data: {hasattr(response, 'data')}")
+        logger.info(f"[FULLNAME SEARCH] Response.data type: {type(response.data) if hasattr(response, 'data') else 'N/A'}")
+        logger.info(f"[FULLNAME SEARCH] Response.data length: {len(response.data) if hasattr(response, 'data') and response.data else 0}")
+        
+        if hasattr(response, 'data') and response.data:
+            logger.info(f"[FULLNAME SEARCH] Found {len(response.data)} results")
+            for idx, result in enumerate(response.data[:3], 1):  # Log first 3 results
+                logger.info(f"[FULLNAME SEARCH] Result {idx}: id={result.get('id')}, fullname='{result.get('fullname')}'")
+        else:
+            logger.warning(f"[FULLNAME SEARCH] No results found or response.data is empty/None")
         
         # Field labels mapping (Russian)
         field_labels = {
@@ -1436,17 +1453,19 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
             reply_markup = InlineKeyboardMarkup(keyboard)
         else:
+            logger.warning(f"[FULLNAME SEARCH] No results found for pattern '{pattern}'")
             message = "❌ <b>Клиент не найден</b>."
             reply_markup = get_main_menu_keyboard()
         
-            await update.message.reply_text(
+        await update.message.reply_text(
             message,
             reply_markup=reply_markup,
             parse_mode='HTML'
-            )
+        )
         
     except Exception as e:
-        logger.error(f"Error checking by fullname: {e}", exc_info=True)
+        logger.error(f"[FULLNAME SEARCH] Error checking by fullname: {e}", exc_info=True)
+        logger.error(f"[FULLNAME SEARCH] Search value was: '{search_value}', pattern was: '{pattern if 'pattern' in locals() else 'N/A'}'")
         error_msg = "❌ Произошла ошибка при проверке. Попробуйте позже или обратитесь к администратору."
         await update.message.reply_text(
             error_msg,
