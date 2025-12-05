@@ -134,7 +134,7 @@ def normalize_telegram_id(tg_id: str) -> str:
     return ''.join(filter(str.isdigit, tg_id))
 
 def normalize_text_field(text: str) -> str:
-    """Normalize text field (fullname, manager_name): trim spaces, collapse multiple spaces"""
+    """Normalize text field (fullname, manager_name): trim spaces, collapse multiple spaces, limit length"""
     if not text:
         return ""
     # Trim leading/trailing whitespace
@@ -145,6 +145,9 @@ def normalize_text_field(text: str) -> str:
     normalized = ''.join(char for char in normalized if char.isprintable() or char.isspace())
     # Final trim after cleaning
     normalized = normalized.strip()
+    # Limit to 500 characters to prevent database issues
+    if len(normalized) > 500:
+        normalized = normalized[:500]
     return normalized
 
 def escape_html(text: str) -> str:
@@ -778,6 +781,60 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Попробуйте снова или обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
+    else:
+        # Unknown callback data - should not happen, but handle gracefully
+        logger.warning(f"Unknown callback data received: {data}")
+        await query.answer("⚠️ Неизвестная команда. Используйте меню.", show_alert=True)
+        try:
+            if query.message:
+                await query.edit_message_text(
+                    "❌ Неизвестная команда.\n\n"
+                    "Используйте кнопки меню для навигации.",
+                    reply_markup=get_main_menu_keyboard()
+                )
+        except Exception as e:
+            logger.error(f"Error handling unknown callback: {e}", exc_info=True)
+
+# Global fallback handlers
+async def unknown_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle callback queries that don't match any pattern"""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer("⚠️ Неизвестная команда. Используйте меню.", show_alert=True)
+            if query.message:
+                await query.edit_message_text(
+                    "❌ Неизвестная команда.\n\n"
+                    "Используйте кнопки меню для навигации.",
+                    reply_markup=get_main_menu_keyboard()
+                )
+        except Exception as e:
+            logger.error(f"Error in unknown_callback_handler: {e}", exc_info=True)
+    return ConversationHandler.END
+
+async def unknown_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle commands sent during ConversationHandler (except /q and /start)"""
+    if not update.message or not update.message.text:
+        return
+    
+    command = update.message.text.strip().split()[0] if update.message.text else ""
+    
+    # Ignore /q and /start as they are handled separately
+    if command in ["/q", "/start"]:
+        return
+    
+    # Show message that command is not available during conversation
+    try:
+        await update.message.reply_text(
+            f"⚠️ Команда {command} недоступна во время выполнения операции.\n\n"
+            "Используйте /q для возврата в главное меню или завершите текущую операцию.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error in unknown_command_handler: {e}", exc_info=True)
+    
+    # Don't end conversation, let user continue or use /q
+    return None
 
 # Message cleanup functions
 async def cleanup_check_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -875,6 +932,10 @@ async def cleanup_all_messages_before_main_menu(update: Update, context: Context
 async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for check by telegram conversation"""
     query = update.callback_query
+    if not query:
+        logger.error("check_telegram_callback: query is None")
+        return ConversationHandler.END
+    
     await query.answer()
     
     # Clean up old check messages if any
@@ -885,13 +946,21 @@ async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         # If message can't be edited (e.g., already deleted), send new message
         logger.warning(f"Could not edit message in check_telegram_callback: {e}")
-        await query.message.reply_text("📱 Введите Имя пользователя Telegram для проверки:")
+        if query.message:
+            await query.message.reply_text("📱 Введите Имя пользователя Telegram для проверки:")
+        else:
+            logger.error("check_telegram_callback: query.message is None")
+            return ConversationHandler.END
     
     return CHECK_BY_TELEGRAM
 
 async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for check by facebook link conversation"""
     query = update.callback_query
+    if not query:
+        logger.error("check_fb_link_callback: query is None")
+        return ConversationHandler.END
+    
     await query.answer()
     
     # Clean up old check messages if any
@@ -902,13 +971,21 @@ async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         # If message can't be edited (e.g., already deleted), send new message
         logger.warning(f"Could not edit message in check_fb_link_callback: {e}")
-        await query.message.reply_text("🔗 Введите Facebook Ссылка для проверки:")
+        if query.message:
+            await query.message.reply_text("🔗 Введите Facebook Ссылка для проверки:")
+        else:
+            logger.error("check_fb_link_callback: query.message is None")
+            return ConversationHandler.END
     
     return CHECK_BY_FB_LINK
 
 async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for check by phone conversation"""
     query = update.callback_query
+    if not query:
+        logger.error("check_phone_callback: query is None")
+        return ConversationHandler.END
+    
     await query.answer()
     
     # Clean up old check messages if any
@@ -919,13 +996,21 @@ async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         # If message can't be edited (e.g., already deleted), send new message
         logger.warning(f"Could not edit message in check_phone_callback: {e}")
-        await query.message.reply_text("🔢 Введите номер телефона для проверки:")
+        if query.message:
+            await query.message.reply_text("🔢 Введите номер телефона для проверки:")
+        else:
+            logger.error("check_phone_callback: query.message is None")
+            return ConversationHandler.END
     
     return CHECK_BY_PHONE
 
 async def check_fullname_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for check by fullname conversation"""
     query = update.callback_query
+    if not query:
+        logger.error("check_fullname_callback: query is None")
+        return ConversationHandler.END
+    
     await query.answer()
     
     # Clean up old check messages if any
@@ -936,7 +1021,11 @@ async def check_fullname_callback(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         # If message can't be edited (e.g., already deleted), send new message
         logger.warning(f"Could not edit message in check_fullname_callback: {e}")
-        await query.message.reply_text("👤 Введите имя клиента (или фамилию):")
+        if query.message:
+            await query.message.reply_text("👤 Введите имя клиента (или фамилию):")
+        else:
+            logger.error("check_fullname_callback: query.message is None")
+            return ConversationHandler.END
     
     return CHECK_BY_FULLNAME
 
@@ -1454,6 +1543,10 @@ async def check_duplicate_realtime(client, field_name: str, field_value: str) ->
 
 async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Universal handler for field input - sequential flow"""
+    if not update.message or not update.message.text:
+        logger.error("add_field_input: update.message or update.message.text is None")
+        return ConversationHandler.END
+    
     user_id = update.effective_user.id
     text = update.message.text.strip()
     field_name = context.user_data.get('current_field')
@@ -1542,6 +1635,18 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         # For other fields (fullname, manager_name), normalize text and check not empty
         if text:
+            # Check length before normalization
+            if len(text) > 500:
+                field_label = get_field_label(field_name)
+                await update.message.reply_text(
+                    f"❌ {field_label} слишком длинное (максимум 500 символов).\n\n"
+                    f"📝 Введите {field_label}:",
+                    reply_markup=get_navigation_keyboard(is_optional=(field_name not in ['fullname', 'manager_name']), show_back=True),
+                    parse_mode='HTML'
+                )
+                await save_add_message(update, context, update.message.message_id)
+                return current_state
+            
             # Normalize text fields (fullname, manager_name)
             normalized_value = normalize_text_field(text)
             if normalized_value:
@@ -2227,9 +2332,12 @@ async def edit_pin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Check if message exists and has text
     if not update.message or not update.message.text:
-        await update.message.reply_text(
-            "❌ Ошибка: Неверный формат сообщения. Пожалуйста, введите PIN-код текстом."
-        )
+        if update.message:
+            await update.message.reply_text(
+                "❌ Ошибка: Неверный формат сообщения. Пожалуйста, введите PIN-код текстом."
+            )
+        else:
+            logger.error("edit_pin_input: update.message is None")
         return EDIT_PIN
     
     text = update.message.text.strip()
@@ -2344,10 +2452,14 @@ async def edit_field_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Universal handler for edit field input"""
+    if not update.message or not update.message.text:
+        logger.error("edit_field_input: update.message or update.message.text is None")
+        return ConversationHandler.END
+    
     user_id = update.effective_user.id
     
     # Check for /skip command first
-    if update.message and update.message.text and update.message.text.strip() == "/skip":
+    if update.message.text.strip() == "/skip":
         # User wants to skip changing this field, return to edit menu
         await update.message.reply_text(
             "✏️ Выберите поле для редактирования:",
@@ -2361,7 +2473,17 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return EDIT_MENU
     
     text = update.message.text.strip()
+    
+    # Check length for text fields (fullname, manager_name)
     field_name = context.user_data.get('current_field')
+    if field_name in ['fullname', 'manager_name'] and len(text) > 500:
+        field_label = get_field_label(field_name)
+        await update.message.reply_text(
+            f"❌ {field_label} слишком длинное (максимум 500 символов).\n\n"
+            f"Попробуйте снова:",
+            reply_markup=get_edit_field_keyboard(user_id)
+        )
+        return context.user_data.get('current_state', EDIT_MENU)
     
     # Update access time BEFORE cleanup to prevent deletion
     user_data_store_access_time[user_id] = time.time()
@@ -2623,6 +2745,10 @@ async def edit_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def edit_lead_entry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for editing a lead - parses lead_id from callback_data"""
     query = update.callback_query
+    if not query or not query.data:
+        logger.error("edit_lead_entry_callback: query or query.data is None")
+        return ConversationHandler.END
+    
     data = query.data
     
     # Parse lead_id from callback_data (format: "edit_lead_123")
@@ -2956,6 +3082,12 @@ def create_telegram_app():
     # Registered AFTER ConversationHandlers so they have priority
     # Note: add_new is included here as fallback, but ConversationHandler should catch it first
     telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu|add_menu|add_new)$"))
+    
+    # Add global fallback for unknown callback queries (must be last)
+    telegram_app.add_handler(CallbackQueryHandler(unknown_callback_handler))
+    
+    # Add handler for unknown commands during conversations (must be after command handlers)
+    telegram_app.add_handler(MessageHandler(filters.COMMAND & ~filters.Regex("^(/start|/q)$"), unknown_command_handler))
     
     # Edit conversation handler
     edit_conv = ConversationHandler(
