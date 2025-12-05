@@ -41,6 +41,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
 
 from supabase import create_client, Client
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -53,13 +55,11 @@ SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 TABLE_NAME = os.environ.get('TABLE_NAME', 'facebook_leads')  # Default table name
 PORT = int(os.environ.get('PORT', 8000))  # Default port, usually set by Koyeb
 
-# Keep-alive configuration
-KEEP_ALIVE_ENABLED = os.environ.get('KEEP_ALIVE_ENABLED', 'true').lower() == 'true'
-KEEP_ALIVE_INTERVAL = int(os.environ.get('KEEP_ALIVE_INTERVAL', '300'))  # 5 minutes default
-KEEP_ALIVE_URL = os.environ.get('KEEP_ALIVE_URL', None)  # Auto-detect if not set
-
 # Supabase client - thread-safe, can be used concurrently by multiple users
 supabase: Client = None
+
+# Keep-alive scheduler
+scheduler = None
 
 # Cache for uniqueness checks (TTL: 5 minutes)
 uniqueness_cache = {}
@@ -2822,6 +2822,9 @@ def initialize_telegram_app():
             # Start processing updates
             loop.run_until_complete(telegram_app.start())
             
+            # Setup keep-alive scheduler after bot is started
+            setup_keep_alive_scheduler()
+            
             # Keep the loop running to process updates
             loop.run_forever()
         except Exception as e:
@@ -2987,47 +2990,44 @@ def create_telegram_app():
 # Setup signal handlers for graceful shutdown
 setup_signal_handlers()
 
-def keep_alive_worker():
-    """Background thread to keep the service alive by pinging health endpoint"""
-    if not KEEP_ALIVE_ENABLED:
+async def single_keep_alive():
+    """Keep bot alive by calling bot.get_me() - works even in Sleeping state"""
+    global telegram_app
+    if telegram_app is None or telegram_app.bot is None:
+        logger.warning("Keep-alive: Telegram app not initialized")
         return
-    
-    # Wait a bit for the app to start
-    time.sleep(10)
-    
-    # Determine the URL to ping
-    if KEEP_ALIVE_URL:
-        url = KEEP_ALIVE_URL
-    elif WEBHOOK_URL:
-        # Use webhook URL but replace /webhook with /health
-        url = WEBHOOK_URL.replace('/webhook', '/health')
-        if url == WEBHOOK_URL:  # If no /webhook in URL, just append /health
-            url = f"{WEBHOOK_URL.rstrip('/')}/health"
-    else:
-        logger.warning("Keep-alive disabled: WEBHOOK_URL not set")
-        return
-    
-    logger.info(f"Keep-alive worker started, pinging {url} every {KEEP_ALIVE_INTERVAL} seconds")
     
     try:
-        import requests
-    except ImportError:
-        logger.error("Keep-alive disabled: requests library not installed. Add 'requests' to requirements.txt")
+        await telegram_app.bot.get_me()
+        logger.debug("Keep-alive OK: bot.get_me() successful")
+    except Exception as e:
+        logger.warning(f"Keep-alive failed: {e}")
+
+def setup_keep_alive_scheduler():
+    """Setup APScheduler to keep bot alive"""
+    global scheduler, telegram_event_loop
+    
+    if telegram_event_loop is None:
+        logger.warning("Keep-alive scheduler: Telegram event loop not ready, will retry later")
         return
     
-    while True:
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                logger.debug(f"Keep-alive ping successful: {response.status_code}")
-            else:
-                logger.warning(f"Keep-alive ping returned status {response.status_code}")
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"Keep-alive ping failed: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error in keep-alive worker: {e}")
+    try:
+        # Create scheduler with the telegram event loop
+        scheduler = AsyncIOScheduler(event_loop=telegram_event_loop)
         
-        time.sleep(KEEP_ALIVE_INTERVAL)
+        # Add job to call bot.get_me() every 5 minutes
+        scheduler.add_job(
+            single_keep_alive,
+            trigger=IntervalTrigger(minutes=5),
+            id='keep_alive',
+            name='Keep bot alive',
+            replace_existing=True
+        )
+        
+        scheduler.start()
+        logger.info("Keep-alive scheduler started: bot.get_me() will be called every 5 minutes")
+    except Exception as e:
+        logger.error(f"Failed to setup keep-alive scheduler: {e}", exc_info=True)
 
 # Initialize Telegram app when module is imported (needed for gunicorn)
 # This ensures telegram_app is initialized even when running with gunicorn
@@ -3035,12 +3035,6 @@ try:
     initialize_telegram_app()
 except Exception as e:
     logger.error(f"Failed to initialize Telegram app on module import: {e}", exc_info=True)
-
-# Start keep-alive worker in background thread
-if KEEP_ALIVE_ENABLED:
-    keep_alive_thread = threading.Thread(target=keep_alive_worker, daemon=True)
-    keep_alive_thread.start()
-    logger.info("Keep-alive worker thread started")
 
 if __name__ == '__main__':
     # Validate environment variables
