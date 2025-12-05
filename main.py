@@ -3085,9 +3085,6 @@ def create_telegram_app():
     # Note: add_new is included here as fallback, but ConversationHandler should catch it first
     telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern="^(main_menu|check_menu|add_menu|add_new)$"))
     
-    # Add global fallback for unknown callback queries (must be last)
-    telegram_app.add_handler(CallbackQueryHandler(unknown_callback_handler))
-    
     # Add handler for unknown commands during conversations (must be after command handlers)
     telegram_app.add_handler(MessageHandler(filters.COMMAND & ~filters.Regex("^(/start|/q)$"), unknown_command_handler))
     
@@ -3131,6 +3128,9 @@ def create_telegram_app():
     )
     
     telegram_app.add_handler(edit_conv)
+    
+    # Add global fallback for unknown callback queries (must be last, after all ConversationHandlers)
+    telegram_app.add_handler(CallbackQueryHandler(unknown_callback_handler))
     
     return telegram_app
 
