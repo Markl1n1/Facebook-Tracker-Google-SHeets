@@ -1329,7 +1329,9 @@ async def check_by_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Search using ilike with contains pattern (case-insensitive)
         # Limit to 10 results at DB level for better performance
         # Sort by created_at descending (newest first)
-        response = client.table(TABLE_NAME).select("*").ilike("fullname", f"%{search_value}%").order("created_at", desc=True).limit(10).execute()
+        # Supabase REST uses * as wildcard, not %
+        pattern = f"*{search_value}*"
+        response = client.table(TABLE_NAME).select("*").ilike("fullname", pattern).order("created_at", desc=True).limit(10).execute()
         
         # Field labels mapping (Russian)
         field_labels = {
