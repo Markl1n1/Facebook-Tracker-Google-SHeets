@@ -747,6 +747,28 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 # Callback query handlers
+async def check_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle check_menu callback - return to check menu and end any active ConversationHandler"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    logger.info(f"[CHECK_MENU] Returning to check menu. Clearing conversation state for user {user_id}")
+    
+    # Clear all conversation state to ensure ConversationHandler ends
+    # This prevents old ConversationHandler from intercepting input when user selects different check type
+    clear_all_conversation_state(context, user_id)
+    
+    # Clean up old check messages
+    await cleanup_check_messages(update, context)
+    
+    await query.edit_message_text(
+        "✅ Проверить клиента\n\nВыберите способ проверки:",
+        reply_markup=get_check_menu_keyboard()
+    )
+    
+    return ConversationHandler.END
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks for menu navigation"""
     query = update.callback_query
@@ -815,10 +837,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise
     
     elif data == "check_menu":
-        await query.edit_message_text(
-            "✅ Проверить клиента\n\nВыберите способ проверки:",
-            reply_markup=get_check_menu_keyboard()
-        )
+        return await check_menu_callback(update, context)
     
     elif data == "add_menu":
         await query.edit_message_text(
@@ -3484,7 +3503,11 @@ def create_telegram_app():
                 CommandHandler("start", start_command),
             ]
         },
-        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
+        fallbacks=[
+            CommandHandler("q", quit_command), 
+            CommandHandler("start", start_command),
+            CallbackQueryHandler(check_menu_callback, pattern="^check_menu$"),
+        ],
         per_message=False,
     )
     
@@ -3497,7 +3520,11 @@ def create_telegram_app():
                 CommandHandler("start", start_command),
             ]
         },
-        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
+        fallbacks=[
+            CommandHandler("q", quit_command), 
+            CommandHandler("start", start_command),
+            CallbackQueryHandler(check_menu_callback, pattern="^check_menu$"),
+        ],
         per_message=False,
     )
     
@@ -3510,7 +3537,11 @@ def create_telegram_app():
                 CommandHandler("start", start_command),
             ]
         },
-        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
+        fallbacks=[
+            CommandHandler("q", quit_command), 
+            CommandHandler("start", start_command),
+            CallbackQueryHandler(check_menu_callback, pattern="^check_menu$"),
+        ],
         per_message=False,
     )
     
@@ -3523,7 +3554,11 @@ def create_telegram_app():
                 CommandHandler("start", start_command),
             ]
         },
-        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
+        fallbacks=[
+            CommandHandler("q", quit_command), 
+            CommandHandler("start", start_command),
+            CallbackQueryHandler(check_menu_callback, pattern="^check_menu$"),
+        ],
         per_message=False,
     )
     
@@ -3536,7 +3571,11 @@ def create_telegram_app():
                 CommandHandler("start", start_command),
             ]
         },
-        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
+        fallbacks=[
+            CommandHandler("q", quit_command), 
+            CommandHandler("start", start_command),
+            CallbackQueryHandler(check_menu_callback, pattern="^check_menu$"),
+        ],
         per_message=False,
     )
     
