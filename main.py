@@ -1072,6 +1072,7 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data_store[user_id] = {}
         user_data_store_access_time[user_id] = time.time()
         context.user_data['current_field'] = 'fullname'
+        context.user_data['current_state'] = ADD_FULLNAME  # ЯВНО устанавливаем состояние
         context.user_data['add_step'] = 0
         
         # Start with first field: Full Name
