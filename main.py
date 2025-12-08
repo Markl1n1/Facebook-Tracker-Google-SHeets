@@ -3217,35 +3217,65 @@ def create_telegram_app():
     # Conversation handlers for checking (register BEFORE button_callback to have priority)
     check_telegram_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_telegram_callback, pattern="^check_telegram$")],
-        states={CHECK_BY_TELEGRAM: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_input)]},
+        states={
+            CHECK_BY_TELEGRAM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ]
+        },
         fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
     check_fb_link_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fb_link_callback, pattern="^check_fb_link$")],
-        states={CHECK_BY_FB_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_link_input)]},
+        states={
+            CHECK_BY_FB_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_link_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ]
+        },
         fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
     check_telegram_id_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_telegram_id_callback, pattern="^check_telegram_id$")],
-        states={CHECK_BY_TELEGRAM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_id_input)]},
+        states={
+            CHECK_BY_TELEGRAM_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_id_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ]
+        },
         fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
     check_phone_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_phone_callback, pattern="^check_phone$")],
-        states={CHECK_BY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_phone_input)]},
+        states={
+            CHECK_BY_PHONE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, check_phone_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ]
+        },
         fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
     check_fullname_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fullname_callback, pattern="^check_fullname$")],
-        states={CHECK_BY_FULLNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fullname_input)]},
+        states={
+            CHECK_BY_FULLNAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, check_fullname_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ]
+        },
         fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
@@ -3258,40 +3288,54 @@ def create_telegram_app():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input),
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
             ],
             ADD_MANAGER_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input),
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
             ],
             ADD_PHONE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input),
                 CallbackQueryHandler(add_skip_callback, pattern="^add_skip$"),
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
             ],
             ADD_FB_LINK: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input),
                 CallbackQueryHandler(add_skip_callback, pattern="^add_skip$"),
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
             ],
             ADD_TELEGRAM_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input),
                 CallbackQueryHandler(add_skip_callback, pattern="^add_skip$"),
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
             ],
             ADD_TELEGRAM_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_field_input),
                 CallbackQueryHandler(add_skip_callback, pattern="^add_skip$"),
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
             ],
             ADD_REVIEW: [
                 CallbackQueryHandler(add_save_callback, pattern="^add_save$"),
                 CallbackQueryHandler(add_back_callback, pattern="^add_back$"),
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
             ],
         },
         fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
@@ -3320,7 +3364,11 @@ def create_telegram_app():
             CallbackQueryHandler(edit_cancel_callback, pattern="^edit_cancel$"),
         ],
         states={
-            EDIT_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_pin_input)],
+            EDIT_PIN: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_pin_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ],
             EDIT_MENU: [
                 CallbackQueryHandler(edit_field_fullname_callback, pattern="^edit_field_fullname$"),
                 CallbackQueryHandler(edit_field_phone_callback, pattern="^edit_field_phone$"),
@@ -3330,13 +3378,39 @@ def create_telegram_app():
                 CallbackQueryHandler(edit_field_manager_callback, pattern="^edit_field_manager$"),
                 CallbackQueryHandler(edit_save_callback, pattern="^edit_save$"),
                 CallbackQueryHandler(edit_cancel_callback, pattern="^edit_cancel$"),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
             ],
-            EDIT_FULLNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
-            EDIT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
-            EDIT_FB_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
-            EDIT_TELEGRAM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
-            EDIT_TELEGRAM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
-            EDIT_MANAGER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input)],
+            EDIT_FULLNAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ],
+            EDIT_PHONE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ],
+            EDIT_FB_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ],
+            EDIT_TELEGRAM_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ],
+            EDIT_TELEGRAM_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ],
+            EDIT_MANAGER_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_input),
+                CommandHandler("q", quit_command),
+                CommandHandler("start", start_command),
+            ],
         },
         fallbacks=[
             CommandHandler("q", quit_command),
