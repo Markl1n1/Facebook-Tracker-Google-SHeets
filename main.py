@@ -1544,15 +1544,21 @@ async def check_fullname_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Old add_field_callback removed - using sequential flow now
 
-def cleanup_user_data_store():
-    """Clean up old entries from user_data_store to optimize memory"""
+def cleanup_user_data_store(exclude_user_id: int = None):
+    """Clean up old entries from user_data_store to optimize memory
+    
+    Args:
+        exclude_user_id: User ID to exclude from cleanup (active user to protect from race conditions)
+    """
     global user_data_store, user_data_store_access_time
     
     current_time = time.time()
     users_to_remove = []
     
-    # Remove entries older than TTL
+    # Remove entries older than TTL (but exclude active user)
     for user_id, access_time in user_data_store_access_time.items():
+        if user_id == exclude_user_id:
+            continue  # Never remove active user's data
         if current_time - access_time > USER_DATA_STORE_TTL:
             users_to_remove.append(user_id)
     
@@ -1563,10 +1569,17 @@ def cleanup_user_data_store():
         if user_id in user_data_store_access_time:
             del user_data_store_access_time[user_id]
     
-    # If still too large, remove oldest entries
+    # If still too large, remove oldest entries (but exclude active user)
     if len(user_data_store) > USER_DATA_STORE_MAX_SIZE:
         sorted_users = sorted(user_data_store_access_time.items(), key=lambda x: x[1])
-        users_to_remove = [user_id for user_id, _ in sorted_users[:len(user_data_store) - USER_DATA_STORE_MAX_SIZE]]
+        users_to_remove = []
+        for user_id, _ in sorted_users:
+            if user_id == exclude_user_id:
+                continue  # Never remove active user's data
+            users_to_remove.append(user_id)
+            if len(user_data_store) - len(users_to_remove) <= USER_DATA_STORE_MAX_SIZE:
+                break
+        
         for user_id in users_to_remove:
             if user_id in user_data_store:
                 del user_data_store[user_id]
@@ -1630,8 +1643,12 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Log for debugging
     logger.info(f"[ADD_FIELD] Processing input - current_state: {current_state}, field_name from state: {state_to_field.get(current_state)}, field_name from user_data: {context.user_data.get('current_field')}, field_name determined: {field_name}, text: '{text[:50]}...'")
     
-    # Update access time
+    # Update access time BEFORE cleanup to protect from race conditions
     user_data_store_access_time[user_id] = time.time()
+    
+    # Ensure user_data_store entry exists before cleanup
+    if user_id not in user_data_store:
+        user_data_store[user_id] = {}
     
     # Log before cleanup
     if user_id in user_data_store:
@@ -1639,7 +1656,8 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 'telegram_name' in user_data_store[user_id]:
             logger.info(f"[ADD_FIELD] Before cleanup - telegram_name: '{user_data_store[user_id].get('telegram_name')}'")
     
-    cleanup_user_data_store()
+    # Cleanup with exclusion of current user to prevent race conditions
+    cleanup_user_data_store(exclude_user_id=user_id)
     
     # Log after cleanup
     if user_id in user_data_store:
@@ -1794,6 +1812,9 @@ async def add_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Save value only if validation passed
     if validation_passed and normalized_value:
+        # Ensure user_data_store entry exists (protection against race conditions)
+        if user_id not in user_data_store:
+            user_data_store[user_id] = {}
         user_data_store[user_id][field_name] = normalized_value
         logger.info(f"[ADD_FIELD] Saved {field_name} = '{normalized_value}' for user {user_id}")
         logger.info(f"[ADD_FIELD] user_data_store[{user_id}] keys: {list(user_data_store[user_id].keys())}")
@@ -2683,6 +2704,7 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return context.user_data.get('current_state', EDIT_MENU)
     
     # Update access time BEFORE cleanup to prevent deletion
+    # Update access time BEFORE cleanup to protect from race conditions
     user_data_store_access_time[user_id] = time.time()
     
     # Ensure user_data_store entry exists before cleanup
@@ -2710,8 +2732,12 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_data_store_access_time[user_id] = time.time()
                 except Exception as e:
                     logger.error(f"Error reloading lead data: {e}", exc_info=True)
+        else:
+            # If no lead_id, create empty entry
+            user_data_store[user_id] = {}
     
-    cleanup_user_data_store()
+    # Cleanup with exclusion of current user to prevent race conditions
+    cleanup_user_data_store(exclude_user_id=user_id)
     
     if not field_name:
         await update.message.reply_text(
@@ -2780,11 +2806,11 @@ async def edit_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Save value only if validation passed
     if validation_passed and normalized_value:
-        # Ensure user_data_store[user_id] exists before assignment
+        # Ensure user_data_store[user_id] exists before assignment (protection against race conditions)
         if user_id not in user_data_store:
             user_data_store[user_id] = {}
         user_data_store[user_id][field_name] = normalized_value
-        # Update access time after saving
+        # Update access time after saving to protect from cleanup
         user_data_store_access_time[user_id] = time.time()
         
         # Show confirmation message
