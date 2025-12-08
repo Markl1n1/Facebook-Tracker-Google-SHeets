@@ -610,28 +610,46 @@ def get_add_menu_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# Command handlers
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command - show main menu"""
-    try:
-        # Clear any conversation state - explicitly clear all keys to ensure ConversationHandler ends
-        if context.user_data:
-            keys_to_remove = [
-                'current_field', 'current_state', 'add_step', 'editing_lead_id',
-                'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
-                'check_results', 'selected_lead_id', 'original_lead_data'
-            ]
-            for key in keys_to_remove:
-                if key in context.user_data:
-                    del context.user_data[key]
-            context.user_data.clear()
+# Helper function to clear all conversation state including internal ConversationHandler keys
+def clear_all_conversation_state(context: ContextTypes.DEFAULT_TYPE, user_id: int = None):
+    """Clear all conversation state including internal ConversationHandler keys (_conversation_*)"""
+    if context.user_data:
+        # Remove all conversation-related keys
+        keys_to_remove = [
+            'current_field', 'current_state', 'add_step', 'editing_lead_id',
+            'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
+            'check_results', 'selected_lead_id', 'original_lead_data'
+        ]
+        for key in keys_to_remove:
+            if key in context.user_data:
+                del context.user_data[key]
         
-        # Clear user data store if exists
-        user_id = update.effective_user.id
+        # Remove all internal ConversationHandler keys (they start with _conversation_)
+        conversation_keys = [key for key in context.user_data.keys() if key.startswith('_conversation_')]
+        for key in conversation_keys:
+            del context.user_data[key]
+            logger.debug(f"Cleared ConversationHandler internal key: {key}")
+        
+        # Clear all remaining state
+        context.user_data.clear()
+        logger.info(f"Cleared all conversation state for user {user_id if user_id else 'unknown'}")
+    
+    # Clear user data store if user_id provided
+    if user_id:
         if user_id in user_data_store:
             del user_data_store[user_id]
         if user_id in user_data_store_access_time:
             del user_data_store_access_time[user_id]
+
+# Command handlers
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command - show main menu"""
+    try:
+        user_id = update.effective_user.id
+        logger.info(f"[START] Clearing all conversation state for user {user_id}")
+        
+        # Clear all conversation state including internal ConversationHandler keys
+        clear_all_conversation_state(context, user_id)
         
         # Clean up all intermediate messages before showing main menu
         await cleanup_all_messages_before_main_menu(update, context)
@@ -659,26 +677,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /q command - return to main menu from any state"""
     try:
-        # Clear any conversation state - explicitly clear all keys to ensure ConversationHandler ends
-        if context.user_data:
-            # Remove all conversation-related keys
-            keys_to_remove = [
-                'current_field', 'current_state', 'add_step', 'editing_lead_id',
-                'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
-                'check_results', 'selected_lead_id'
-            ]
-            for key in keys_to_remove:
-                if key in context.user_data:
-                    del context.user_data[key]
-            # Also clear any remaining state
-            context.user_data.clear()
-        
-        # Clear user data store if exists
         user_id = update.effective_user.id
-        if user_id in user_data_store:
-            del user_data_store[user_id]
-        if user_id in user_data_store_access_time:
-            del user_data_store_access_time[user_id]
+        logger.info(f"[QUIT] Clearing all conversation state for user {user_id}")
+        
+        # Clear all conversation state including internal ConversationHandler keys
+        clear_all_conversation_state(context, user_id)
         
         # Show main menu FIRST (fast response)
         welcome_message = (
@@ -841,12 +844,24 @@ async def unknown_command_handler(update: Update, context: ContextTypes.DEFAULT_
     
     command = update.message.text.strip().split()[0] if update.message.text else ""
     
-    # Ignore /q, /start, and /skip as they are handled separately
+    # CRITICAL: Never intercept /start or /q - they must be handled by their dedicated handlers
+    # This prevents issues when ConversationHandler is in a stale state after deploy
     if command in ["/q", "/start", "/skip"]:
-        return
+        logger.warning(f"[UNKNOWN_CMD] Ignoring {command} - should be handled by dedicated handler. Context keys: {list(context.user_data.keys()) if context.user_data else 'empty'}")
+        return None  # Return None to let other handlers process it
+    
+    # Check if we're in a stale ConversationHandler state (has _conversation_ keys but shouldn't)
+    has_conversation_keys = any(key.startswith('_conversation_') for key in (context.user_data.keys() if context.user_data else []))
+    if has_conversation_keys:
+        logger.warning(f"[UNKNOWN_CMD] Command {command} intercepted but ConversationHandler appears stale. Clearing state.")
+        user_id = update.effective_user.id
+        clear_all_conversation_state(context, user_id)
+        # After clearing, let the command be processed by its handler
+        return None
     
     # Show message that command is not available during conversation
     try:
+        logger.info(f"[UNKNOWN_CMD] Command {command} not available during active conversation")
         await update.message.reply_text(
             f"⚠️ Команда {command} недоступна во время выполнения операции.\n\n"
             "Используйте /q для возврата в главное меню или завершите текущую операцию.",
@@ -960,17 +975,12 @@ async def check_telegram_callback(update: Update, context: ContextTypes.DEFAULT_
     
     await query.answer()
     
-    # Explicitly clear any residual conversation state to ensure clean entry
-    # This prevents issues when re-entering after /q
-    if context.user_data:
-        keys_to_remove = [
-            'current_field', 'current_state', 'add_step', 'editing_lead_id',
-            'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
-            'check_results', 'selected_lead_id', 'original_lead_data'
-        ]
-        for key in keys_to_remove:
-            if key in context.user_data:
-                del context.user_data[key]
+    user_id = query.from_user.id
+    logger.info(f"[CHECK_TELEGRAM] Clearing state before entry for user {user_id}")
+    
+    # Explicitly clear all conversation state including internal ConversationHandler keys
+    # This prevents issues when re-entering after /q or stale states after deploy
+    clear_all_conversation_state(context, user_id)
     
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
@@ -997,17 +1007,12 @@ async def check_fb_link_callback(update: Update, context: ContextTypes.DEFAULT_T
     
     await query.answer()
     
-    # Explicitly clear any residual conversation state to ensure clean entry
-    # This prevents issues when re-entering after /q
-    if context.user_data:
-        keys_to_remove = [
-            'current_field', 'current_state', 'add_step', 'editing_lead_id',
-            'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
-            'check_results', 'selected_lead_id', 'original_lead_data'
-        ]
-        for key in keys_to_remove:
-            if key in context.user_data:
-                del context.user_data[key]
+    user_id = query.from_user.id
+    logger.info(f"[CHECK_FB_LINK] Clearing state before entry for user {user_id}")
+    
+    # Explicitly clear all conversation state including internal ConversationHandler keys
+    # This prevents issues when re-entering after /q or stale states after deploy
+    clear_all_conversation_state(context, user_id)
     
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
@@ -1034,17 +1039,12 @@ async def check_phone_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await query.answer()
     
-    # Explicitly clear any residual conversation state to ensure clean entry
-    # This prevents issues when re-entering after /q
-    if context.user_data:
-        keys_to_remove = [
-            'current_field', 'current_state', 'add_step', 'editing_lead_id',
-            'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
-            'check_results', 'selected_lead_id', 'original_lead_data'
-        ]
-        for key in keys_to_remove:
-            if key in context.user_data:
-                del context.user_data[key]
+    user_id = query.from_user.id
+    logger.info(f"[CHECK_PHONE] Clearing state before entry for user {user_id}")
+    
+    # Explicitly clear all conversation state including internal ConversationHandler keys
+    # This prevents issues when re-entering after /q or stale states after deploy
+    clear_all_conversation_state(context, user_id)
     
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
@@ -1071,17 +1071,12 @@ async def check_fullname_callback(update: Update, context: ContextTypes.DEFAULT_
     
     await query.answer()
     
-    # Explicitly clear any residual conversation state to ensure clean entry
-    # This prevents issues when re-entering after /q
-    if context.user_data:
-        keys_to_remove = [
-            'current_field', 'current_state', 'add_step', 'editing_lead_id',
-            'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
-            'check_results', 'selected_lead_id', 'original_lead_data'
-        ]
-        for key in keys_to_remove:
-            if key in context.user_data:
-                del context.user_data[key]
+    user_id = query.from_user.id
+    logger.info(f"[CHECK_FULLNAME] Clearing state before entry for user {user_id}")
+    
+    # Explicitly clear all conversation state including internal ConversationHandler keys
+    # This prevents issues when re-entering after /q or stale states after deploy
+    clear_all_conversation_state(context, user_id)
     
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
@@ -1107,19 +1102,13 @@ async def add_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         user_id = query.from_user.id
         
-        # Clear any existing conversation state before starting new one
-        # This ensures we can start a new conversation even if user is in another ConversationHandler state
-        if context.user_data:
-            # Keep only essential data, clear conversation states
-            keys_to_remove = [
-                'current_field', 'current_state', 'add_step', 'editing_lead_id',
-                'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
-                'check_results', 'selected_lead_id', 'original_lead_data'
-            ]
-            for key in keys_to_remove:
-                if key in context.user_data:
-                    del context.user_data[key]
+        logger.info(f"[ADD_NEW] Clearing state before entry for user {user_id}")
         
+        # Explicitly clear all conversation state including internal ConversationHandler keys
+        # This prevents issues when re-entering after /q or stale states after deploy
+        clear_all_conversation_state(context, user_id)
+        
+        # Initialize fresh state for new add flow
         user_data_store[user_id] = {}
         user_data_store_access_time[user_id] = time.time()
         context.user_data['current_field'] = 'fullname'
@@ -1573,17 +1562,12 @@ async def check_telegram_id_callback(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     await query.answer()
     
-    # Explicitly clear any residual conversation state to ensure clean entry
-    # This prevents issues when re-entering after /q
-    if context.user_data:
-        keys_to_remove = [
-            'current_field', 'current_state', 'add_step', 'editing_lead_id',
-            'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
-            'check_results', 'selected_lead_id', 'original_lead_data'
-        ]
-        for key in keys_to_remove:
-            if key in context.user_data:
-                del context.user_data[key]
+    user_id = query.from_user.id
+    logger.info(f"[CHECK_TELEGRAM_ID] Clearing state before entry for user {user_id}")
+    
+    # Explicitly clear all conversation state including internal ConversationHandler keys
+    # This prevents issues when re-entering after /q or stale states after deploy
+    clear_all_conversation_state(context, user_id)
     
     # Clean up old check messages if any
     await cleanup_check_messages(update, context)
