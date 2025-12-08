@@ -614,6 +614,25 @@ def get_add_menu_keyboard():
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command - show main menu"""
     try:
+        # Clear any conversation state - explicitly clear all keys to ensure ConversationHandler ends
+        if context.user_data:
+            keys_to_remove = [
+                'current_field', 'current_state', 'add_step', 'editing_lead_id',
+                'last_check_messages', 'add_message_ids', 'check_by', 'check_value',
+                'check_results', 'selected_lead_id', 'original_lead_data'
+            ]
+            for key in keys_to_remove:
+                if key in context.user_data:
+                    del context.user_data[key]
+            context.user_data.clear()
+        
+        # Clear user data store if exists
+        user_id = update.effective_user.id
+        if user_id in user_data_store:
+            del user_data_store[user_id]
+        if user_id in user_data_store_access_time:
+            del user_data_store_access_time[user_id]
+        
         # Clean up all intermediate messages before showing main menu
         await cleanup_all_messages_before_main_menu(update, context)
         
@@ -625,6 +644,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             welcome_message,
             reply_markup=get_main_menu_keyboard()
         )
+        
+        return ConversationHandler.END
     except Exception as e:
         logger.error(f"Error in start_command: {e}", exc_info=True)
         try:
@@ -633,6 +654,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except:
             pass
+        return ConversationHandler.END
 
 async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /q command - return to main menu from any state"""
@@ -3196,35 +3218,35 @@ def create_telegram_app():
     check_telegram_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_telegram_callback, pattern="^check_telegram$")],
         states={CHECK_BY_TELEGRAM: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_input)]},
-        fallbacks=[CommandHandler("q", quit_command)],
+        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
     check_fb_link_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fb_link_callback, pattern="^check_fb_link$")],
         states={CHECK_BY_FB_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fb_link_input)]},
-        fallbacks=[CommandHandler("q", quit_command)],
+        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
     check_telegram_id_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_telegram_id_callback, pattern="^check_telegram_id$")],
         states={CHECK_BY_TELEGRAM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_telegram_id_input)]},
-        fallbacks=[CommandHandler("q", quit_command)],
+        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
     check_phone_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_phone_callback, pattern="^check_phone$")],
         states={CHECK_BY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_phone_input)]},
-        fallbacks=[CommandHandler("q", quit_command)],
+        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
     check_fullname_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_fullname_callback, pattern="^check_fullname$")],
         states={CHECK_BY_FULLNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_fullname_input)]},
-        fallbacks=[CommandHandler("q", quit_command)],
+        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
@@ -3272,7 +3294,7 @@ def create_telegram_app():
                 CallbackQueryHandler(add_cancel_callback, pattern="^add_cancel$"),
             ],
         },
-        fallbacks=[CommandHandler("q", quit_command)],
+        fallbacks=[CommandHandler("q", quit_command), CommandHandler("start", start_command)],
         per_message=False,
     )
     
@@ -3318,6 +3340,7 @@ def create_telegram_app():
         },
         fallbacks=[
             CommandHandler("q", quit_command),
+            CommandHandler("start", start_command),
             CommandHandler("skip", lambda u, c: edit_field_input(u, c)),
         ],
         per_message=False,
