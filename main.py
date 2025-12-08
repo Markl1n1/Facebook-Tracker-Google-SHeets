@@ -1816,10 +1816,6 @@ async def show_add_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = user_data_store.get(user_id, {})
     
     logger.info(f"[SHOW_REVIEW] user_data keys: {list(user_data.keys())}")
-    if 'telegram_name' in user_data:
-        logger.info(f"[SHOW_REVIEW] telegram_name: '{user_data.get('telegram_name')}'")
-    else:
-        logger.warning(f"[SHOW_REVIEW] telegram_name NOT in user_data!")
     
     message_parts = ["✅ <b>Проверьте введенные данные:</b>\n"]
     
@@ -2198,12 +2194,6 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Prepare data for saving - map telegram_name to telegram_user for database compatibility
         save_data = user_data.copy()
         
-        # Debug logging
-        logger.info(f"[ADD_SAVE] user_data keys: {list(user_data.keys())}")
-        logger.info(f"[ADD_SAVE] telegram_name in user_data: {'telegram_name' in user_data}")
-        if 'telegram_name' in user_data:
-            logger.info(f"[ADD_SAVE] telegram_name value: '{user_data.get('telegram_name')}' (type: {type(user_data.get('telegram_name'))})")
-        
         # Normalize phone in save_data before saving if present
         if 'phone' in save_data and save_data['phone']:
             save_data['phone'] = normalize_phone(save_data['phone'])
@@ -2211,29 +2201,39 @@ async def add_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Map telegram_name to telegram_user for database (backward compatibility)
         if 'telegram_name' in save_data:
             telegram_name_value = save_data.pop('telegram_name')
-            logger.info(f"[ADD_SAVE] Mapping telegram_name to telegram_user: '{telegram_name_value}'")
             # Only set telegram_user if telegram_name has a value (not empty string or None)
             if telegram_name_value:
                 save_data['telegram_user'] = telegram_name_value
-                logger.info(f"[ADD_SAVE] Set telegram_user = '{telegram_name_value}'")
-            else:
-                logger.warning(f"[ADD_SAVE] telegram_name is empty/None, not setting telegram_user")
-        else:
-            logger.warning(f"[ADD_SAVE] telegram_name not found in save_data")
-        
-        logger.info(f"[ADD_SAVE] Final save_data keys: {list(save_data.keys())}")
-        if 'telegram_user' in save_data:
-            logger.info(f"[ADD_SAVE] telegram_user value: '{save_data.get('telegram_user')}' (type: {type(save_data.get('telegram_user'))})")
-        else:
-            logger.warning(f"[ADD_SAVE] telegram_user not in save_data after mapping")
         
         logger.info(f"[ADD_SAVE] Inserting data to database: {save_data}")
         response = client.table(TABLE_NAME).insert(save_data).execute()
         
-        logger.info(f"[ADD_SAVE] Database response: {response.data if response.data else 'No data returned'}")
+        # Log successful save with all fields
         if response.data and len(response.data) > 0:
-            saved_telegram_user = response.data[0].get('telegram_user')
-            logger.info(f"[ADD_SAVE] Saved telegram_user in DB: '{saved_telegram_user}' (type: {type(saved_telegram_user)})")
+            saved_lead = response.data[0]
+            logger.info(f"[NEW_LEAD_SAVED] ✅ New lead successfully saved to database")
+            logger.info(f"[NEW_LEAD_SAVED] Lead ID: {saved_lead.get('id')}")
+            
+            # Log all fields with their values
+            field_labels = {
+                'fullname': 'Клиент (fullname)',
+                'manager_name': 'Стейдж менеджера (manager_name)',
+                'phone': 'Номер телефона (phone)',
+                'facebook_link': 'Facebook Ссылка (facebook_link)',
+                'telegram_user': 'Имя пользователя Telegram (telegram_user)',
+                'telegram_id': 'Telegram ID (telegram_id)',
+                'created_at': 'Дата создания (created_at)'
+            }
+            
+            logged_fields = []
+            for field_name, field_label in field_labels.items():
+                value = saved_lead.get(field_name)
+                if value is not None and value != '':
+                    logged_fields.append(f"  {field_label}: '{value}'")
+                else:
+                    logged_fields.append(f"  {field_label}: (не указано)")
+            
+            logger.info(f"[NEW_LEAD_SAVED] Fields:\n" + "\n".join(logged_fields))
         
         if response.data:
             # Show success message with entered data
